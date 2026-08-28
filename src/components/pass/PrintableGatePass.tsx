@@ -87,19 +87,16 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
               <th className="border border-black py-1.5 px-1.5 text-center w-12 font-bold">
                 S.NO.
               </th>
-              <th className="border border-black py-1.5 px-1.5 text-center w-16 font-bold">
+              <th className="border border-black py-1.5 px-1.5 text-center w-20 font-bold">
                 ROOM NO.
               </th>
               <th className="border border-black py-1.5 px-2 text-center font-bold">
                 NAME OF THE STUDENT
               </th>
-              <th className="border border-black py-1.5 px-1.5 text-center w-16 font-bold">
+              <th className="border border-black py-1.5 px-1.5 text-center w-20 font-bold">
                 DEPT
               </th>
-              <th className="border border-black py-1.5 px-2 text-center w-28 font-bold">
-                PARENT NO.
-              </th>
-              <th className="border border-black py-1.5 px-2 text-center w-28 font-bold">
+              <th className="border border-black py-1.5 px-2 text-center w-36 font-bold">
                 STUDENT SIGNATURE
               </th>
             </tr>
@@ -110,7 +107,7 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
               <>
                 <tr className="bg-gray-100 print:bg-gray-100 font-bold">
                   <td
-                    colSpan={6}
+                    colSpan={5}
                     className="border border-black py-1 px-2 text-center uppercase tracking-wide text-xs font-bold"
                   >
                     III-YEAR
@@ -141,9 +138,6 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
                         <td className="border border-black py-1 px-1.5 text-center font-medium">
                           {student.department}
                         </td>
-                        <td className="border border-black py-1 px-2 text-center font-medium">
-                          {student.parentPhone || '-'}
-                        </td>
                         <td className="border border-black py-1 px-2 text-center h-7">
                           {/* Blank for signature */}
                         </td>
@@ -159,7 +153,7 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
               <>
                 <tr className="bg-gray-100 print:bg-gray-100 font-bold">
                   <td
-                    colSpan={6}
+                    colSpan={5}
                     className="border border-black py-1 px-2 text-center uppercase tracking-wide text-xs font-bold"
                   >
                     II-YEAR
@@ -190,9 +184,6 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
                         <td className="border border-black py-1 px-1.5 text-center font-medium">
                           {student.department}
                         </td>
-                        <td className="border border-black py-1 px-2 text-center font-medium">
-                          {student.parentPhone || '-'}
-                        </td>
                         <td className="border border-black py-1 px-2 text-center h-7">
                           {/* Blank for signature */}
                         </td>
@@ -209,7 +200,7 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
                 {thirdYearGroups.length === 0 && secondYearGroups.length === 0 ? null : (
                   <tr className="bg-gray-100 print:bg-gray-100 font-bold">
                     <td
-                      colSpan={6}
+                      colSpan={5}
                       className="border border-black py-1 px-2 text-center uppercase tracking-wide text-xs font-bold"
                     >
                       OTHER STUDENTS
@@ -239,9 +230,6 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
                         </td>
                         <td className="border border-black py-1 px-1.5 text-center font-medium">
                           {student.department}
-                        </td>
-                        <td className="border border-black py-1 px-2 text-center font-medium">
-                          {student.parentPhone || '-'}
                         </td>
                         <td className="border border-black py-1 px-2 text-center h-7">
                           {/* Blank */}

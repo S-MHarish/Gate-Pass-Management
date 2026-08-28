@@ -63,7 +63,7 @@ export const generateGatePassPDF = (
       tableRows.push([
         {
           content: sectionTitle,
-          colSpan: 6,
+          colSpan: 5,
           styles: {
             halign: 'center',
             fontStyle: 'bold',
@@ -94,7 +94,6 @@ export const generateGatePassPDF = (
             },
             student.name.toUpperCase(),
             student.department.toUpperCase(),
-            student.parentPhone || '-',
             '', // Blank for Student Signature
           ]);
         } else {
@@ -103,7 +102,6 @@ export const generateGatePassPDF = (
             sNo,
             student.name.toUpperCase(),
             student.department.toUpperCase(),
-            student.parentPhone || '-',
             '',
           ]);
         }
@@ -120,11 +118,10 @@ export const generateGatePassPDF = (
     head: [
       [
         { content: 'S.NO.', styles: { halign: 'center', cellWidth: 14 } },
-        { content: 'ROOM NO.', styles: { halign: 'center', cellWidth: 20 } },
-        { content: 'NAME OF THE STUDENT', styles: { halign: 'center', cellWidth: 62 } },
-        { content: 'DEPT', styles: { halign: 'center', cellWidth: 20 } },
-        { content: 'PARENT NO.', styles: { halign: 'center', cellWidth: 34 } },
-        { content: 'STUDENT SIGNATURE', styles: { halign: 'center', cellWidth: 32 } },
+        { content: 'ROOM NO.', styles: { halign: 'center', cellWidth: 22 } },
+        { content: 'NAME OF THE STUDENT', styles: { halign: 'center', cellWidth: 84 } },
+        { content: 'DEPT', styles: { halign: 'center', cellWidth: 22 } },
+        { content: 'STUDENT SIGNATURE', styles: { halign: 'center', cellWidth: 40 } },
       ],
     ],
     body: tableRows,
@@ -153,8 +150,7 @@ export const generateGatePassPDF = (
       1: { halign: 'center' },
       2: { halign: 'left' },
       3: { halign: 'center' },
-      4: { halign: 'center' },
-      5: { halign: 'center', minCellHeight: 6.5 },
+      4: { halign: 'center', minCellHeight: 6.5 },
     },
     didDrawPage: () => {
       // Formal Exact Header on each page

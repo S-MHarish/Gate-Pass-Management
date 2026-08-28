@@ -67,7 +67,7 @@ export const generateGatePassDocx = async (
       height: { value: 340, rule: HeightRule.ATLEAST },
       children: [
         new TableCell({
-          width: { size: 8, type: WidthType.PERCENTAGE },
+          width: { size: 9, type: WidthType.PERCENTAGE },
           verticalAlign: VerticalAlign.CENTER,
           children: [
             new Paragraph({
@@ -77,7 +77,7 @@ export const generateGatePassDocx = async (
           ],
         }),
         new TableCell({
-          width: { size: 12, type: WidthType.PERCENTAGE },
+          width: { size: 13, type: WidthType.PERCENTAGE },
           verticalAlign: VerticalAlign.CENTER,
           children: [
             new Paragraph({
@@ -87,7 +87,7 @@ export const generateGatePassDocx = async (
           ],
         }),
         new TableCell({
-          width: { size: 36, type: WidthType.PERCENTAGE },
+          width: { size: 46, type: WidthType.PERCENTAGE },
           verticalAlign: VerticalAlign.CENTER,
           children: [
             new Paragraph({
@@ -107,17 +107,7 @@ export const generateGatePassDocx = async (
           ],
         }),
         new TableCell({
-          width: { size: 18, type: WidthType.PERCENTAGE },
-          verticalAlign: VerticalAlign.CENTER,
-          children: [
-            new Paragraph({
-              alignment: AlignmentType.CENTER,
-              children: [new TextRun({ text: 'PARENT NO.', bold: true, size: 18 })],
-            }),
-          ],
-        }),
-        new TableCell({
-          width: { size: 14, type: WidthType.PERCENTAGE },
+          width: { size: 20, type: WidthType.PERCENTAGE },
           verticalAlign: VerticalAlign.CENTER,
           children: [
             new Paragraph({
@@ -140,7 +130,7 @@ export const generateGatePassDocx = async (
           height: { value: 300, rule: HeightRule.ATLEAST },
           children: [
             new TableCell({
-              columnSpan: 6,
+              columnSpan: 5,
               shading: { fill: 'EFEFEF', type: ShadingType.CLEAR },
               verticalAlign: VerticalAlign.CENTER,
               children: [
@@ -222,22 +212,6 @@ export const generateGatePassDocx = async (
                     children: [
                       new TextRun({
                         text: student.department.toUpperCase(),
-                        size: 18,
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-
-              // PARENT NO. Cell
-              new TableCell({
-                verticalAlign: VerticalAlign.CENTER,
-                children: [
-                  new Paragraph({
-                    alignment: AlignmentType.CENTER,
-                    children: [
-                      new TextRun({
-                        text: student.parentPhone || '-',
                         size: 18,
                       }),
                     ],
