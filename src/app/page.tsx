@@ -31,6 +31,7 @@ import {
   getGatePasses,
   saveGatePass,
   getHostelInfo,
+  compareRoomNumbers,
 } from '@/lib/storage';
 import { INITIAL_STUDENTS } from '@/lib/seedData';
 import { StatCard } from '@/components/ui/StatCard';
@@ -73,7 +74,7 @@ export default function DashboardPage() {
   const totalStudents = students.length;
   const uniqueRooms = useMemo(() => {
     const set = new Set(students.map((s) => s.roomNo));
-    return Array.from(set).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+    return Array.from(set).sort(compareRoomNumbers);
   }, [students]);
 
   const totalRoomsCount = uniqueRooms.length || 22;
@@ -86,27 +87,33 @@ export default function DashboardPage() {
   // Filtered Students for Quick Selection
   const filteredStudents = useMemo(() => {
     return students.filter((s) => {
-      // Room match (handles "10", "Room 10", "01", etc.)
+      // Room match (handles "1", "Room 1", "01", "R-1", etc.)
       const cleanRoom = roomQuery.replace(/[^0-9]/g, '');
+      const studentClean = s.roomNo.replace(/[^0-9]/g, '');
       const matchRoom =
-        !cleanRoom ||
-        s.roomNo === cleanRoom.padStart(2, '0') ||
-        s.roomNo === cleanRoom;
+        !roomQuery ||
+        (cleanRoom && studentClean && (studentClean === cleanRoom || studentClean.padStart(2, '0') === cleanRoom.padStart(2, '0'))) ||
+        s.roomNo.toLowerCase() === roomQuery.toLowerCase();
 
-      // Student name / phone / id search
+      // Student name / phone / id / room search
       const q = studentSearchQuery.trim().toLowerCase();
+      const cleanQ = q.replace(/[^0-9]/g, '');
       const matchSearch =
         !q ||
         s.name.toLowerCase().includes(q) ||
-        s.parentPhone.includes(q) ||
+        (s.parentPhone && s.parentPhone.toLowerCase().includes(q)) ||
         s.department.toLowerCase().includes(q) ||
+        s.roomNo.toLowerCase().includes(q) ||
+        `room ${s.roomNo}`.toLowerCase().includes(q) ||
+        `r-${s.roomNo}`.toLowerCase().includes(q) ||
+        (cleanQ !== '' && s.roomNo.replace(/^0+/, '') === cleanQ.replace(/^0+/, '')) ||
         String(s.sNo) === q;
 
       // Year filter
       const matchYear = selectedYear === 'ALL' || s.year === selectedYear;
 
       // Dept filter
-      const matchDept = selectedDept === 'ALL' || s.department === selectedDept;
+      const matchDept = selectedDept === 'ALL' || s.department.toUpperCase() === selectedDept.toUpperCase();
 
       return matchRoom && matchSearch && matchYear && matchDept;
     });
@@ -147,7 +154,11 @@ export default function DashboardPage() {
   };
 
   const handleSelectByRoom = (roomNo: string) => {
-    const roomStudents = students.filter((s) => s.roomNo === roomNo);
+    const roomClean = roomNo.replace(/[^0-9]/g, '');
+    const roomStudents = students.filter((s) => {
+      const sClean = s.roomNo.replace(/[^0-9]/g, '');
+      return s.roomNo === roomNo || (roomClean && sClean && (sClean === roomClean || sClean.padStart(2, '0') === roomClean.padStart(2, '0')));
+    });
     setSelectedStudentIds((prev) => {
       const next = new Set(prev);
       const allSelected = roomStudents.every((s) => next.has(s.id));

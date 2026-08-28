@@ -27,6 +27,7 @@ import {
   saveGatePass,
   getHostelInfo,
   getGatePasses,
+  compareRoomNumbers,
 } from '@/lib/storage';
 import { INITIAL_STUDENTS } from '@/lib/seedData';
 import { Suspense } from 'react';
@@ -78,28 +79,35 @@ function GeneratePassContent() {
 
   const uniqueRooms = useMemo(() => {
     const set = new Set(students.map((s) => s.roomNo));
-    return Array.from(set).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+    return Array.from(set).sort(compareRoomNumbers);
   }, [students]);
 
   const filteredStudents = useMemo(() => {
     return students.filter((s) => {
+      // Room match (handles "1", "Room 1", "01", "R-1", etc.)
       const cleanRoom = roomFilter.replace(/[^0-9]/g, '');
+      const studentClean = s.roomNo.replace(/[^0-9]/g, '');
       const matchRoom =
-        !cleanRoom ||
-        s.roomNo === cleanRoom.padStart(2, '0') ||
-        s.roomNo === cleanRoom;
+        !roomFilter ||
+        (cleanRoom && studentClean && (studentClean === cleanRoom || studentClean.padStart(2, '0') === cleanRoom.padStart(2, '0'))) ||
+        s.roomNo.toLowerCase() === roomFilter.toLowerCase();
 
+      // Search query (handles student name, room, department, phone, or sNo)
       const q = searchQuery.trim().toLowerCase();
+      const cleanQ = q.replace(/[^0-9]/g, '');
       const matchSearch =
         !q ||
         s.name.toLowerCase().includes(q) ||
-        s.parentPhone.includes(q) ||
+        (s.parentPhone && s.parentPhone.toLowerCase().includes(q)) ||
         s.department.toLowerCase().includes(q) ||
-        s.roomNo.includes(q) ||
+        s.roomNo.toLowerCase().includes(q) ||
+        `room ${s.roomNo}`.toLowerCase().includes(q) ||
+        `r-${s.roomNo}`.toLowerCase().includes(q) ||
+        (cleanQ !== '' && s.roomNo.replace(/^0+/, '') === cleanQ.replace(/^0+/, '')) ||
         String(s.sNo) === q;
 
       const matchYear = yearFilter === 'ALL' || s.year === yearFilter;
-      const matchDept = deptFilter === 'ALL' || s.department === deptFilter;
+      const matchDept = deptFilter === 'ALL' || s.department.toUpperCase() === deptFilter.toUpperCase();
 
       return matchRoom && matchSearch && matchYear && matchDept;
     });
@@ -138,7 +146,11 @@ function GeneratePassContent() {
   };
 
   const handleSelectByRoom = (room: string) => {
-    const inRoom = students.filter((s) => s.roomNo === room);
+    const roomClean = room.replace(/[^0-9]/g, '');
+    const inRoom = students.filter((s) => {
+      const sClean = s.roomNo.replace(/[^0-9]/g, '');
+      return s.roomNo === room || (roomClean && sClean && (sClean === roomClean || sClean.padStart(2, '0') === roomClean.padStart(2, '0')));
+    });
     setSelectedStudentIds((prev) => {
       const next = new Set(prev);
       const allSelected = inRoom.every((s) => next.has(s.id));

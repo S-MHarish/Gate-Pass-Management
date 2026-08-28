@@ -42,55 +42,164 @@ const SAMPLE_HISTORIC_PASSES: GatePass[] = [
   },
 ];
 
+export const compareRoomNumbers = (roomA: string, roomB: string): number => {
+  const numA = parseInt(String(roomA).replace(/[^0-9]/g, ''), 10);
+  const numB = parseInt(String(roomB).replace(/[^0-9]/g, ''), 10);
+
+  if (!isNaN(numA) && !isNaN(numB) && numA !== numB) {
+    return numA - numB;
+  }
+
+  return String(roomA).localeCompare(String(roomB), undefined, { numeric: true, sensitivity: 'base' });
+};
+
+export const sortAndReindexStudents = (students: Student[]): Student[] => {
+  if (!students || students.length === 0) return [];
+
+  // Group students by room preserving original order within each room
+  const roomGroups = new Map<string, Student[]>();
+
+  students.forEach((student) => {
+    const key = student.roomNo;
+    if (!roomGroups.has(key)) {
+      roomGroups.set(key, []);
+    }
+    roomGroups.get(key)!.push(student);
+  });
+
+  // Sort rooms numerically (Room 1, 2, ..., 9, 10, 22)
+  const sortedRooms = Array.from(roomGroups.keys()).sort(compareRoomNumbers);
+
+  // Flatten the room groups into single sorted array
+  const sortedStudents: Student[] = [];
+  sortedRooms.forEach((room) => {
+    const members = roomGroups.get(room) || [];
+    sortedStudents.push(...members);
+  });
+
+  // Re-index global S.No in sequential 1, 2, 3... order
+  return sortedStudents.map((student, idx) => ({
+    ...student,
+    sNo: idx + 1,
+  }));
+};
+
 export const getStudents = (): Student[] => {
-  if (typeof window === 'undefined') return INITIAL_STUDENTS;
+  if (typeof window === 'undefined') return sortAndReindexStudents(INITIAL_STUDENTS);
   try {
     const raw = localStorage.getItem(STUDENTS_KEY);
     if (!raw) {
-      localStorage.setItem(STUDENTS_KEY, JSON.stringify(INITIAL_STUDENTS));
-      return INITIAL_STUDENTS;
+      const initialSorted = sortAndReindexStudents(INITIAL_STUDENTS);
+      localStorage.setItem(STUDENTS_KEY, JSON.stringify(initialSorted));
+      return initialSorted;
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+      return sortAndReindexStudents(parsed);
     }
-    localStorage.setItem(STUDENTS_KEY, JSON.stringify(INITIAL_STUDENTS));
-    return INITIAL_STUDENTS;
+    const initialSorted = sortAndReindexStudents(INITIAL_STUDENTS);
+    localStorage.setItem(STUDENTS_KEY, JSON.stringify(initialSorted));
+    return initialSorted;
   } catch (e) {
     console.error('Failed to parse students from storage:', e);
-    localStorage.setItem(STUDENTS_KEY, JSON.stringify(INITIAL_STUDENTS));
-    return INITIAL_STUDENTS;
+    const initialSorted = sortAndReindexStudents(INITIAL_STUDENTS);
+    localStorage.setItem(STUDENTS_KEY, JSON.stringify(initialSorted));
+    return initialSorted;
   }
 };
 
 export const saveStudents = (students: Student[]): void => {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STUDENTS_KEY, JSON.stringify(students));
+    const sortedAndIndexed = sortAndReindexStudents(students);
+    localStorage.setItem(STUDENTS_KEY, JSON.stringify(sortedAndIndexed));
   } catch (e) {
     console.error('Failed to save students to storage:', e);
   }
 };
 
-export const addStudent = (student: Omit<Student, 'id' | 'sNo'>): Student => {
-  const current = getStudents();
-  const newStudent: Student = {
-    ...student,
-    id: `std-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-    sNo: current.length + 1,
-  };
-  const updated = [...current, newStudent];
-  saveStudents(updated);
-  return newStudent;
+export const isStudentDuplicate = (
+  students: Student[],
+  candidate: { name: string; roomNo: string; parentPhone?: string },
+  excludeId?: string
+): boolean => {
+  const candidateName = candidate.name.trim().toLowerCase().replace(/\s+/g, ' ');
+  const candidateRoom = candidate.roomNo.trim().replace(/^0+/, '');
+  const candidatePhone = candidate.parentPhone ? candidate.parentPhone.replace(/\D/g, '') : '';
+
+  if (!candidateName) return false;
+
+  return students.some((s) => {
+    if (excludeId && s.id === excludeId) return false;
+    const sName = s.name.trim().toLowerCase().replace(/\s+/g, ' ');
+    const sRoom = s.roomNo.trim().replace(/^0+/, '');
+    const sPhone = s.parentPhone ? s.parentPhone.replace(/\D/g, '') : '';
+
+    // Same student name in same room
+    if (sName === candidateName && sRoom === candidateRoom) {
+      return true;
+    }
+
+    // Exact full name match in database (if distinctive)
+    if (sName === candidateName && candidateName.length >= 3) {
+      return true;
+    }
+
+    // Exact phone match if phone has 10 digits
+    if (candidatePhone && sPhone && candidatePhone.length >= 10 && candidatePhone === sPhone) {
+      return true;
+    }
+
+    return false;
+  });
 };
 
-export const updateStudent = (id: string, updates: Partial<Student>): boolean => {
+export const getNextSNo = (students: Student[]): number => {
+  if (!students || students.length === 0) return 1;
+  return students.length + 1;
+};
+
+export const addStudent = (
+  student: Omit<Student, 'id' | 'sNo'>
+): { success: boolean; student?: Student; error?: string } => {
+  const current = getStudents();
+
+  if (isStudentDuplicate(current, student)) {
+    return { success: false, error: 'Student already exists.' };
+  }
+
+  const newStudent: Student = {
+    ...student,
+    id: `std-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    sNo: current.length + 1,
+    isActive: true,
+  };
+
+  const updated = sortAndReindexStudents([...current, newStudent]);
+  saveStudents(updated);
+  const created = updated.find((s) => s.id === newStudent.id) || newStudent;
+  return { success: true, student: created };
+};
+
+export const updateStudent = (id: string, updates: Partial<Student>): { success: boolean; error?: string } => {
   const current = getStudents();
   const index = current.findIndex((s) => s.id === id);
-  if (index === -1) return false;
-  current[index] = { ...current[index], ...updates };
+  if (index === -1) return { success: false, error: 'Student not found.' };
+
+  const target = current[index];
+  const candidate = {
+    name: updates.name ?? target.name,
+    roomNo: updates.roomNo ?? target.roomNo,
+    parentPhone: updates.parentPhone ?? target.parentPhone,
+  };
+
+  if (isStudentDuplicate(current, candidate, id)) {
+    return { success: false, error: 'Student with these details already exists.' };
+  }
+
+  current[index] = { ...target, ...updates };
   saveStudents(current);
-  return true;
+  return { success: true };
 };
 
 export const deleteStudent = (id: string): boolean => {
@@ -186,11 +295,19 @@ export const saveHostelInfo = (info: HostelInfo): void => {
 
 export const filterStudents = (students: Student[], filters: FilterOptions): Student[] => {
   return students.filter((s) => {
-    // Room Filter (matches exact room or partial)
+    // Room Filter (matches exact room or normalized number)
     if (filters.room && filters.room !== 'ALL') {
-      const normalizedRoom = filters.room.replace(/^0+/, '');
-      const studentRoomNormalized = s.roomNo.replace(/^0+/, '');
-      if (s.roomNo !== filters.room && studentRoomNormalized !== normalizedRoom) {
+      const filterClean = filters.room.replace(/[^0-9]/g, '');
+      const studentClean = s.roomNo.replace(/[^0-9]/g, '');
+      if (filterClean && studentClean) {
+        if (
+          s.roomNo !== filters.room &&
+          filterClean !== studentClean &&
+          filterClean.padStart(2, '0') !== studentClean.padStart(2, '0')
+        ) {
+          return false;
+        }
+      } else if (s.roomNo.toLowerCase() !== filters.room.toLowerCase()) {
         return false;
       }
     }
@@ -212,11 +329,21 @@ export const filterStudents = (students: Student[], filters: FilterOptions): Stu
     // Text Search
     if (filters.search) {
       const q = filters.search.toLowerCase().trim();
+      const cleanQ = q.replace(/[^0-9]/g, '');
       const matchName = s.name.toLowerCase().includes(q);
-      const matchRoom = s.roomNo.toLowerCase().includes(q);
-      const matchDept = s.department.toLowerCase().includes(q);
-      const matchSNo = String(s.sNo).includes(q);
-      if (!matchName && !matchRoom && !matchDept && !matchSNo) {
+      const normalizedRoom = s.roomNo.replace(/^0+/, '');
+      const matchRoom =
+        s.roomNo.toLowerCase() === q ||
+        `room ${s.roomNo}`.toLowerCase() === q ||
+        `r-${s.roomNo}`.toLowerCase() === q ||
+        `r ${s.roomNo}`.toLowerCase() === q ||
+        (cleanQ !== '' && normalizedRoom === cleanQ.replace(/^0+/, '')) ||
+        (cleanQ !== '' && q.startsWith('room ') && normalizedRoom === q.replace('room ', '').trim().replace(/^0+/, ''));
+      const matchDept = s.department.toLowerCase() === q || s.department.toLowerCase().includes(q);
+      const matchPhone = s.parentPhone ? s.parentPhone.toLowerCase().includes(q) : false;
+      const matchSNo = String(s.sNo) === q || `sno ${s.sNo}`.toLowerCase() === q;
+
+      if (!matchName && !matchRoom && !matchDept && !matchPhone && !matchSNo) {
         return false;
       }
     }

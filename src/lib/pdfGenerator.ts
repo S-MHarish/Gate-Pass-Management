@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import autoTable, { RowInput } from 'jspdf-autotable';
 import { GatePass, HostelInfo, Student } from '@/types';
 import { DEFAULT_HOSTEL_INFO } from './seedData';
+import { compareRoomNumbers } from './storage';
 
 interface RoomGroup {
   roomNo: string;
@@ -9,14 +10,7 @@ interface RoomGroup {
 }
 
 function groupStudentsByRoom(students: Student[]): RoomGroup[] {
-  const sorted = [...students].sort((a, b) => {
-    const rA = parseInt(a.roomNo, 10);
-    const rB = parseInt(b.roomNo, 10);
-    if (!isNaN(rA) && !isNaN(rB) && rA !== rB) {
-      return rA - rB;
-    }
-    return a.roomNo.localeCompare(b.roomNo);
-  });
+  const sorted = [...students].sort((a, b) => compareRoomNumbers(a.roomNo, b.roomNo));
 
   const groups: RoomGroup[] = [];
   sorted.forEach((student) => {
