@@ -281,21 +281,30 @@ export function isStudentDuplicateInDB(
   if (!candidateName) return false;
 
   return all.some((s) => {
-    if (excludeId && s.id === excludeId) return false;
+    if (excludeId && (s.id === excludeId || s.id.toLowerCase() === excludeId.toLowerCase())) {
+      return false;
+    }
     const sName = s.name.trim().toLowerCase().replace(/\s+/g, ' ');
     const sRoom = s.roomNo.trim().replace(/^0+/, '');
     const sPhone = s.parentPhone ? s.parentPhone.replace(/\D/g, '') : '';
 
-    if (sName === candidateName && sRoom === candidateRoom) return true;
-    if (sName === candidateName && candidateName.length >= 3) return true;
-    if (candidatePhone && sPhone && candidatePhone.length >= 10 && candidatePhone === sPhone) return true;
+    // Same student name in same room
+    if (sName === candidateName && sRoom === candidateRoom) {
+      return true;
+    }
+
+    // Exact phone match in same room
+    if (candidatePhone && sPhone && candidatePhone.length >= 10 && candidatePhone === sPhone && sRoom === candidateRoom) {
+      return true;
+    }
+
     return false;
   });
 }
 
 export function createStudent(data: Omit<Student, 'id' | 'sNo'>): { success: boolean; student?: Student; error?: string } {
   if (isStudentDuplicateInDB(data)) {
-    return { success: false, error: 'A student with these details already exists in the database.' };
+    return { success: false, error: 'A student with these details already exists in the same room.' };
   }
 
   const newId = `std-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -357,20 +366,41 @@ export function updateStudentInDB(
   updates: Partial<Student>
 ): { success: boolean; student?: Student; error?: string } {
   const currentStudents = getAllStudents();
-  const existing = currentStudents.find((s) => s.id === id);
+  const cleanId = String(id || '').trim();
+  const decodedId = decodeURIComponent(cleanId);
+
+  // 1. Primary lookup by ID
+  let existing = currentStudents.find(
+    (s) => s.id === cleanId || s.id === decodedId || s.id.toLowerCase() === cleanId.toLowerCase()
+  );
+
+  // 2. Resilient fallback lookup by student name if ID differed
+  if (!existing && updates.name) {
+    const candidateName = updates.name.trim().toLowerCase().replace(/\s+/g, ' ');
+    existing = currentStudents.find((s) => {
+      const sName = s.name.trim().toLowerCase().replace(/\s+/g, ' ');
+      return sName === candidateName;
+    });
+  }
+
+  // 3. Fallback lookup by S.No
+  if (!existing && updates.sNo) {
+    existing = currentStudents.find((s) => s.sNo === updates.sNo);
+  }
 
   if (!existing) {
     return { success: false, error: 'Student not found in database.' };
   }
 
+  const targetId = existing.id;
   const candidate = {
     name: updates.name ?? existing.name,
     roomNo: updates.roomNo ?? existing.roomNo,
     parentPhone: updates.parentPhone ?? existing.parentPhone,
   };
 
-  if (isStudentDuplicateInDB(candidate, id)) {
-    return { success: false, error: 'Another student with these details already exists in the database.' };
+  if (isStudentDuplicateInDB(candidate, targetId)) {
+    return { success: false, error: 'Another student with these details already exists in the same room.' };
   }
 
   const newName = updates.name !== undefined ? updates.name.trim().toUpperCase() : existing.name;
@@ -387,7 +417,7 @@ export function updateStudentInDB(
         UPDATE students
         SET name = ?, room_no = ?, department = ?, year = ?, parent_phone = ?, updated_at = ?, version = version + 1
         WHERE id = ?
-      `).run(newName, newRoom, newDept, newYear, newPhone, now, id);
+      `).run(newName, newRoom, newDept, newYear, newPhone, now, targetId);
 
       const all = getAllStudents();
       const updateSNoStmt = db.prepare('UPDATE students SET s_no = ? WHERE id = ?');
@@ -395,7 +425,7 @@ export function updateStudentInDB(
         updateSNoStmt.run(s.sNo, s.id);
       }
 
-      const updated = all.find((s) => s.id === id);
+      const updated = all.find((s) => s.id === targetId);
       return { success: true, student: updated };
     } catch (e) {
       console.warn('SQLite update failed, using JSON store:', e);
@@ -403,7 +433,7 @@ export function updateStudentInDB(
   }
 
   const store = loadJsonStore();
-  const idx = store.students.findIndex((s) => s.id === id);
+  const idx = store.students.findIndex((s) => s.id === targetId);
   if (idx !== -1) {
     store.students[idx] = {
       ...store.students[idx],
@@ -417,18 +447,24 @@ export function updateStudentInDB(
     };
     store.students = sortAndReindexStudents(store.students);
     persistJsonStore();
-    const updated = store.students.find((s) => s.id === id);
+    const updated = store.students.find((s) => s.id === targetId);
     return { success: true, student: updated };
   }
 
-  return { success: false, error: 'Student not found.' };
+  return { success: false, error: 'Student not found in registry.' };
 }
 
 export function deleteStudentFromDB(id: string): boolean {
+  const cleanId = String(id || '').trim();
+  const decodedId = decodeURIComponent(cleanId);
+  const currentStudents = getAllStudents();
+  const target = currentStudents.find((s) => s.id === cleanId || s.id === decodedId);
+  const targetId = target ? target.id : cleanId;
+
   const db = getSqliteDatabase();
   if (db) {
     try {
-      const res = db.prepare('DELETE FROM students WHERE id = ?').run(id);
+      const res = db.prepare('DELETE FROM students WHERE id = ?').run(targetId);
       if (res.changes > 0) {
         const all = getAllStudents();
         const updateSNoStmt = db.prepare('UPDATE students SET s_no = ? WHERE id = ?');
@@ -443,7 +479,7 @@ export function deleteStudentFromDB(id: string): boolean {
   }
 
   const store = loadJsonStore();
-  const filtered = store.students.filter((s) => s.id !== id);
+  const filtered = store.students.filter((s) => s.id !== targetId);
   if (filtered.length === store.students.length) return false;
 
   store.students = sortAndReindexStudents(filtered);

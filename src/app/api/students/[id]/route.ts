@@ -9,24 +9,39 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   try {
-    const { id } = params;
+    const rawId = params?.id || '';
+    const id = decodeURIComponent(rawId);
     const body = await request.json();
 
     const result = updateStudentInDB(id, body);
     if (!result.success || !result.student) {
-      return NextResponse.json({ success: false, error: result.error || 'Failed to update student.' }, { status: 400 });
+      return NextResponse.json(
+        { success: false, message: result.error || 'Failed to update student in database.' },
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
     }
 
     const allStudents = getAllStudents();
-    broadcastRealtimeEvent({
-      type: 'STUDENT_UPDATED',
-      data: { student: result.student, allStudents },
-      timestamp: new Date().toISOString(),
-    });
+    try {
+      broadcastRealtimeEvent({
+        type: 'STUDENT_UPDATED',
+        data: { student: result.student, allStudents },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('Realtime broadcast skipped:', e);
+    }
 
-    return NextResponse.json({ success: true, student: result.student });
+    return NextResponse.json(
+      { success: true, student: result.student, message: 'Student updated successfully' },
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    console.error('Error updating student:', error);
+    return NextResponse.json(
+      { success: false, message: error.message || 'Internal error updating student' },
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
   }
 }
 
@@ -35,22 +50,37 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    const { id } = params;
+    const rawId = params?.id || '';
+    const id = decodeURIComponent(rawId);
     const success = deleteStudentFromDB(id);
 
     if (!success) {
-      return NextResponse.json({ success: false, error: 'Student not found or already deleted.' }, { status: 404 });
+      return NextResponse.json(
+        { success: false, message: 'Student not found in database or already deleted.' },
+        { status: 404, headers: { 'Content-Type': 'application/json' } }
+      );
     }
 
     const allStudents = getAllStudents();
-    broadcastRealtimeEvent({
-      type: 'STUDENT_DELETED',
-      data: { id, allStudents },
-      timestamp: new Date().toISOString(),
-    });
+    try {
+      broadcastRealtimeEvent({
+        type: 'STUDENT_DELETED',
+        data: { id, allStudents },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('Realtime broadcast skipped:', e);
+    }
 
-    return NextResponse.json({ success: true, id });
+    return NextResponse.json(
+      { success: true, id, message: 'Student deleted successfully' },
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    console.error('Error deleting student:', error);
+    return NextResponse.json(
+      { success: false, message: error.message || 'Internal error deleting student' },
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
   }
 }
