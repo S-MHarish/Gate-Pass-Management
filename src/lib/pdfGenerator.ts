@@ -2,7 +2,7 @@ import jsPDF from 'jspdf';
 import autoTable, { RowInput } from 'jspdf-autotable';
 import { GatePass, HostelInfo, Student } from '@/types';
 import { DEFAULT_HOSTEL_INFO } from './seedData';
-import { compareRoomNumbers } from './storage';
+import { compareRoomNumbers } from './roomUtils';
 
 interface RoomGroup {
   roomNo: string;
@@ -41,6 +41,7 @@ export const generateGatePassPDF = (
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 14;
+  const includePhone = Boolean(pass.includeParentPhone);
 
   // Group students by year
   const thirdYearStudents = pass.students.filter((s) => s.year === 'III');
@@ -63,7 +64,7 @@ export const generateGatePassPDF = (
       tableRows.push([
         {
           content: sectionTitle,
-          colSpan: 5,
+          colSpan: includePhone ? 6 : 5,
           styles: {
             halign: 'center',
             fontStyle: 'bold',
@@ -79,31 +80,62 @@ export const generateGatePassPDF = (
       const roomSpan = group.students.length;
       group.students.forEach((student, idx) => {
         const sNo = (currentSNo++).toString();
-        if (idx === 0) {
-          // First row contains the merged ROOM NO. cell
-          tableRows.push([
-            sNo,
-            {
-              content: group.roomNo,
-              rowSpan: roomSpan,
-              styles: {
-                halign: 'center',
-                valign: 'middle',
-                fontStyle: 'bold',
+        const studentName = (student.name || '').toUpperCase();
+        const dept = (student.department || '').toUpperCase();
+        const phone = student.parentPhone || '';
+
+        if (includePhone) {
+          if (idx === 0) {
+            tableRows.push([
+              sNo,
+              {
+                content: group.roomNo,
+                rowSpan: roomSpan,
+                styles: {
+                  halign: 'center',
+                  valign: 'middle',
+                  fontStyle: 'bold',
+                },
               },
-            },
-            student.name.toUpperCase(),
-            student.department.toUpperCase(),
-            '', // Blank for Student Signature
-          ]);
+              studentName,
+              dept,
+              phone,
+              '', // Blank for Student Signature
+            ]);
+          } else {
+            tableRows.push([
+              sNo,
+              studentName,
+              dept,
+              phone,
+              '',
+            ]);
+          }
         } else {
-          // Subsequent rows omit the spanned ROOM NO. cell
-          tableRows.push([
-            sNo,
-            student.name.toUpperCase(),
-            student.department.toUpperCase(),
-            '',
-          ]);
+          if (idx === 0) {
+            tableRows.push([
+              sNo,
+              {
+                content: group.roomNo,
+                rowSpan: roomSpan,
+                styles: {
+                  halign: 'center',
+                  valign: 'middle',
+                  fontStyle: 'bold',
+                },
+              },
+              studentName,
+              dept,
+              '', // Blank for Student Signature
+            ]);
+          } else {
+            tableRows.push([
+              sNo,
+              studentName,
+              dept,
+              '',
+            ]);
+          }
         }
       });
     });
@@ -113,17 +145,46 @@ export const generateGatePassPDF = (
   addGroupRows(secondYearGroups, secondYearGroups.length > 0 ? 'II-YEAR' : undefined);
   addGroupRows(otherGroups, otherGroups.length > 0 && (thirdYearGroups.length > 0 || secondYearGroups.length > 0) ? 'OTHER STUDENTS' : undefined);
 
-  // Use autoTable to build official document
+  const headRow = includePhone
+    ? [
+        [
+          { content: 'S.NO.', styles: { halign: 'center', cellWidth: 12 } },
+          { content: 'ROOM NO.', styles: { halign: 'center', cellWidth: 18 } },
+          { content: 'NAME OF THE STUDENT', styles: { halign: 'center', cellWidth: 68 } },
+          { content: 'DEPT', styles: { halign: 'center', cellWidth: 18 } },
+          { content: 'PARENT NO.', styles: { halign: 'center', cellWidth: 28 } },
+          { content: 'STUDENT SIGNATURE', styles: { halign: 'center', cellWidth: 38 } },
+        ],
+      ]
+    : [
+        [
+          { content: 'S.NO.', styles: { halign: 'center', cellWidth: 14 } },
+          { content: 'ROOM NO.', styles: { halign: 'center', cellWidth: 22 } },
+          { content: 'NAME OF THE STUDENT', styles: { halign: 'center', cellWidth: 84 } },
+          { content: 'DEPT', styles: { halign: 'center', cellWidth: 22 } },
+          { content: 'STUDENT SIGNATURE', styles: { halign: 'center', cellWidth: 40 } },
+        ],
+      ];
+
+  const columnStyles = includePhone
+    ? {
+        0: { halign: 'center' },
+        1: { halign: 'center' },
+        2: { halign: 'left' },
+        3: { halign: 'center' },
+        4: { halign: 'center' },
+        5: { halign: 'center', minCellHeight: 6.5 },
+      }
+    : {
+        0: { halign: 'center' },
+        1: { halign: 'center' },
+        2: { halign: 'left' },
+        3: { halign: 'center' },
+        4: { halign: 'center', minCellHeight: 6.5 },
+      };
+
   autoTable(doc, {
-    head: [
-      [
-        { content: 'S.NO.', styles: { halign: 'center', cellWidth: 14 } },
-        { content: 'ROOM NO.', styles: { halign: 'center', cellWidth: 22 } },
-        { content: 'NAME OF THE STUDENT', styles: { halign: 'center', cellWidth: 84 } },
-        { content: 'DEPT', styles: { halign: 'center', cellWidth: 22 } },
-        { content: 'STUDENT SIGNATURE', styles: { halign: 'center', cellWidth: 40 } },
-      ],
-    ],
+    head: headRow as any,
     body: tableRows,
     startY: 32,
     margin: { top: 32, left: margin, right: margin, bottom: 25 },
@@ -145,15 +206,9 @@ export const generateGatePassPDF = (
       lineWidth: 0.25,
       lineColor: [0, 0, 0],
     },
-    columnStyles: {
-      0: { halign: 'center' },
-      1: { halign: 'center' },
-      2: { halign: 'left' },
-      3: { halign: 'center' },
-      4: { halign: 'center', minCellHeight: 6.5 },
-    },
+    columnStyles: columnStyles as any,
     didDrawPage: () => {
-      // Formal Exact Header on each page
+      // Official Exact Header
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(11);
       doc.setTextColor(0, 0, 0);
@@ -177,7 +232,7 @@ export const generateGatePassPDF = (
       doc.setFontSize(9.5);
       const title = hostelInfo.passTitle || 'Common Gate Pass (II & III Year)';
       doc.text(title, pageWidth / 2, 23, { align: 'center' });
-      
+
       // Underline for title
       const textWidth = doc.getTextWidth(title);
       doc.setDrawColor(0, 0, 0);
@@ -191,8 +246,8 @@ export const generateGatePassPDF = (
     },
   });
 
-  // Footer Signatures on the final page
-  const finalY = (doc as any).lastAutoTable.finalY || 240;
+  // Footer Signatures
+  const finalY = (doc as any).lastAutoTable?.finalY || 240;
   const spaceRemaining = pageHeight - finalY;
 
   let signatureY = finalY + 18;
@@ -205,7 +260,6 @@ export const generateGatePassPDF = (
   doc.setFontSize(9.5);
   doc.setTextColor(0, 0, 0);
 
-  // Warden Signatures ONLY at the bottom
   doc.text((hostelInfo.asstWarden || 'ASST. WARDEN').toUpperCase(), margin + 10, signatureY);
   doc.text(
     (hostelInfo.deputyWarden || 'DEPUTY WARDEN').toUpperCase(),

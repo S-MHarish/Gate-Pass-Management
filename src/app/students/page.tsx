@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   Users,
   UserPlus,
@@ -23,23 +23,14 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { Student } from '@/types';
-import {
-  getStudents,
-  saveStudents,
-  addStudent,
-  updateStudent,
-  deleteStudent,
-  resetMasterDatabase,
-  isStudentDuplicate,
-  compareRoomNumbers,
-} from '@/lib/storage';
+import { useRealtime } from '@/context/RealtimeContext';
+import { compareRoomNumbers } from '@/lib/roomUtils';
 import {
   exportStudentsToExcel,
   exportStudentsToCSV,
   downloadSampleExcelTemplate,
   parseStudentsFromExcel,
 } from '@/lib/excelUtils';
-import { INITIAL_STUDENTS } from '@/lib/seedData';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { GlowingButton } from '@/components/ui/GlowingButton';
 import { Modal } from '@/components/ui/Modal';
@@ -48,7 +39,15 @@ import { Badge } from '@/components/ui/Badge';
 const COMMON_DEPTS = ['CSE', 'IT', 'AI&DS', 'AIML', 'CSBS', 'ECE', 'EEE', 'MECH', 'CIVIL'];
 
 export default function StudentsDatabasePage() {
-  const [students, setStudents] = useState<Student[]>(INITIAL_STUDENTS);
+  const {
+    students,
+    addStudent: apiAddStudent,
+    updateStudent: apiUpdateStudent,
+    deleteStudent: apiDeleteStudent,
+    bulkImportStudents: apiBulkImport,
+    resetMasterDatabase: apiResetDatabase,
+  } = useRealtime();
+
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [roomFilter, setRoomFilter] = useState<string>('');
   const [yearFilter, setYearFilter] = useState<string>('ALL');
@@ -62,6 +61,7 @@ export default function StudentsDatabasePage() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
 
   // Active student for edit/delete
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
@@ -84,18 +84,12 @@ export default function StudentsDatabasePage() {
     duplicate?: string;
   }>({});
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Import state
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importStatus, setImportStatus] = useState<{ loading: boolean; errors: string[]; successCount: number } | null>(null);
   const [importMode, setImportMode] = useState<'append' | 'replace'>('append');
-
-  useEffect(() => {
-    setStudents(getStudents());
-  }, []);
-
-  const refreshList = () => {
-    setStudents(getStudents());
-  };
 
   const showNotification = (message: string) => {
     setSuccessToast(message);
@@ -111,7 +105,6 @@ export default function StudentsDatabasePage() {
 
   const filteredStudents = useMemo(() => {
     return students.filter((s) => {
-      // Room match (handles "1", "Room 1", "01", "R-1", etc.)
       const cleanRoom = roomFilter.replace(/[^0-9]/g, '');
       const studentClean = s.roomNo.replace(/[^0-9]/g, '');
       const matchRoom =
@@ -119,7 +112,6 @@ export default function StudentsDatabasePage() {
         (cleanRoom && studentClean && (studentClean === cleanRoom || studentClean.padStart(2, '0') === cleanRoom.padStart(2, '0'))) ||
         s.roomNo.toLowerCase() === roomFilter.toLowerCase();
 
-      // Search query (handles student name, room, department, phone, or sNo)
       const q = searchQuery.trim().toLowerCase();
       const cleanQ = q.replace(/[^0-9]/g, '');
       const matchSearch =
@@ -173,32 +165,28 @@ export default function StudentsDatabasePage() {
     setIsDeleteModalOpen(true);
   };
 
-  // Validate form fields
-  const validateForm = (): boolean => {
+  // Validate form
+  const validateForm = () => {
     const errors: typeof formErrors = {};
-    const trimmedName = formData.name.trim();
-    const trimmedRoom = formData.roomNo.trim();
-    const trimmedDept = formData.department.trim();
-    const trimmedPhone = formData.parentPhone.trim().replace(/[^0-9]/g, '');
-
-    if (!trimmedName) {
-      errors.name = 'Student name is required';
-    } else if (trimmedName.length < 2) {
-      errors.name = 'Student name must be at least 2 characters';
+    if (!formData.name.trim()) {
+      errors.name = 'Student Name is required.';
+    } else if (formData.name.trim().length < 2) {
+      errors.name = 'Name must be at least 2 characters.';
     }
 
-    if (!trimmedRoom) {
-      errors.roomNo = 'Room number is required';
+    if (!formData.roomNo.trim()) {
+      errors.roomNo = 'Room Number is required.';
     }
 
-    if (!trimmedDept) {
-      errors.department = 'Department is required';
+    if (!formData.department.trim()) {
+      errors.department = 'Department is required.';
     }
 
-    if (!formData.parentPhone.trim()) {
-      errors.parentPhone = 'Parent phone number is required';
-    } else if (trimmedPhone.length < 10) {
-      errors.parentPhone = 'Please enter a valid 10-digit parent phone number (e.g. 9876543210)';
+    if (formData.parentPhone && formData.parentPhone.replace(/\D/g, '').length > 0) {
+      const cleanPhone = formData.parentPhone.replace(/\D/g, '');
+      if (cleanPhone.length < 10) {
+        errors.parentPhone = 'Parent phone should be 10 digits.';
+      }
     }
 
     setFormErrors(errors);
@@ -206,300 +194,285 @@ export default function StudentsDatabasePage() {
   };
 
   // Save New Student
-  const handleSaveNew = (e: React.FormEvent) => {
+  const handleSaveAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
 
-    const trimmedName = formData.name.trim();
-    const trimmedRoom = formData.roomNo.trim();
-    const trimmedDept = formData.department.trim().toUpperCase();
-    const cleanPhone = formData.parentPhone.trim().replace(/[^0-9]/g, '');
-
-    const result = addStudent({
-      name: trimmedName,
-      roomNo: trimmedRoom,
-      department: trimmedDept,
+    setIsSubmitting(true);
+    const result = await apiAddStudent({
+      name: formData.name.trim().toUpperCase(),
+      roomNo: formData.roomNo.trim(),
+      department: formData.department.trim().toUpperCase(),
       year: formData.year,
-      parentPhone: cleanPhone || formData.parentPhone.trim(),
+      parentPhone: formData.parentPhone.trim(),
+      isActive: true,
     });
+    setIsSubmitting(false);
 
-    if (!result.success) {
+    if (result.success && result.student) {
+      setIsAddModalOpen(false);
+      showNotification(`✓ Student "${result.student.name}" saved to Room ${result.student.roomNo} in central database!`);
+    } else {
       setFormErrors((prev) => ({
         ...prev,
-        duplicate: result.error || 'Student already exists.',
+        duplicate: result.error || 'Failed to add student.',
       }));
-      return;
     }
-
-    setIsAddModalOpen(false);
-    refreshList();
-    showNotification(`✓ Student added successfully: ${trimmedName} (Room ${trimmedRoom})`);
   };
 
-  // Save Edited Student
-  const handleSaveEdit = (e: React.FormEvent) => {
+  // Save Edit Student
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedStudent) return;
-    if (!validateForm()) return;
+    if (!selectedStudent || !validateForm()) return;
 
-    const trimmedName = formData.name.trim();
-    const trimmedRoom = formData.roomNo.trim();
-    const trimmedDept = formData.department.trim().toUpperCase();
-    const cleanPhone = formData.parentPhone.trim().replace(/[^0-9]/g, '');
-
-    const result = updateStudent(selectedStudent.id, {
-      name: trimmedName,
-      roomNo: trimmedRoom,
-      department: trimmedDept,
+    setIsSubmitting(true);
+    const result = await apiUpdateStudent(selectedStudent.id, {
+      name: formData.name.trim().toUpperCase(),
+      roomNo: formData.roomNo.trim(),
+      department: formData.department.trim().toUpperCase(),
       year: formData.year,
-      parentPhone: cleanPhone || formData.parentPhone.trim(),
+      parentPhone: formData.parentPhone.trim(),
     });
+    setIsSubmitting(false);
 
-    if (!result.success) {
+    if (result.success) {
+      setIsEditModalOpen(false);
+      showNotification(`✓ Details updated for ${formData.name.toUpperCase()} (Room ${formData.roomNo}) across all devices!`);
+    } else {
       setFormErrors((prev) => ({
         ...prev,
-        duplicate: result.error || 'Student already exists.',
+        duplicate: result.error || 'Failed to update student.',
       }));
-      return;
     }
-
-    setIsEditModalOpen(false);
-    refreshList();
-    showNotification(`✓ Student updated successfully: ${trimmedName}`);
   };
 
-  // Confirm Delete
-  const handleConfirmDelete = () => {
+  // Delete Student
+  const handleConfirmDelete = async () => {
     if (!selectedStudent) return;
-    const name = selectedStudent.name;
-    deleteStudent(selectedStudent.id);
-    setIsDeleteModalOpen(false);
-    refreshList();
-    showNotification(`Student ${name} removed from master database.`);
+    setIsSubmitting(true);
+    const result = await apiDeleteStudent(selectedStudent.id);
+    setIsSubmitting(false);
+
+    if (result.success) {
+      setIsDeleteModalOpen(false);
+      showNotification(`✓ Student "${selectedStudent.name}" removed from Room ${selectedStudent.roomNo}.`);
+      setSelectedStudent(null);
+    } else {
+      alert(result.error || 'Failed to delete student.');
+    }
   };
 
-  // Handle Excel/CSV File Upload
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Reset to Factory Default
+  const handleResetToDefault = async () => {
+    setIsSubmitting(true);
+    const result = await apiResetDatabase();
+    setIsSubmitting(false);
+
+    if (result.success) {
+      setIsResetModalOpen(false);
+      showNotification('✓ Master student registry reset to default 97 students for VSB Boys Hostel-I.');
+    } else {
+      alert(result.error || 'Failed to reset master database.');
+    }
+  };
+
+  // Import File Handler
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setImportStatus({ loading: true, errors: [], successCount: 0 });
 
     try {
-      const { students: parsed, errors } = await parseStudentsFromExcel(file);
-      const existing = importMode === 'replace' ? [] : getStudents();
-
-      // Prevent duplicates in append mode
-      const toAdd: Student[] = [];
-      let skippedCount = 0;
-
-      parsed.forEach((p, idx) => {
-        if (importMode === 'append' && isStudentDuplicate([...existing, ...toAdd], p)) {
-          skippedCount++;
-          return;
-        }
-
-        toAdd.push({
-          ...p,
-          id: `std-imp-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
-          sNo: existing.length + toAdd.length + 1,
-          isActive: true,
+      const parsed = await parseStudentsFromExcel(file);
+      if (parsed.students.length === 0) {
+        setImportStatus({
+          loading: false,
+          errors: ['No valid student records found in file.'],
+          successCount: 0,
         });
-      });
-
-      const updatedDatabase = [...existing, ...toAdd];
-      saveStudents(updatedDatabase);
-      refreshList();
-
-      const errorList = [...errors];
-      if (skippedCount > 0) {
-        errorList.push(`Skipped ${skippedCount} duplicate student(s) already in the database.`);
+        return;
       }
 
-      setImportStatus({
-        loading: false,
-        errors: errorList,
-        successCount: toAdd.length,
-      });
-
-      if (toAdd.length > 0) {
-        showNotification(`✓ Successfully imported ${toAdd.length} students!`);
+      const res = await apiBulkImport(parsed.students, importMode);
+      if (res.success) {
+        setImportStatus({
+          loading: false,
+          errors: parsed.errors,
+          successCount: res.count || parsed.students.length,
+        });
+        showNotification(`✓ Successfully imported ${res.count || parsed.students.length} students into central database!`);
+      } else {
+        setImportStatus({
+          loading: false,
+          errors: [res.error || 'Failed to import into database.'],
+          successCount: 0,
+        });
       }
     } catch (err: any) {
       setImportStatus({
         loading: false,
-        errors: [`Failed to parse file: ${err?.message || 'Unknown error'}`],
+        errors: [err.message || 'Error processing spreadsheet file.'],
         successCount: 0,
       });
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
   return (
     <div className="space-y-8 pb-12">
-
-      {/* Floating Success Toast */}
+      
+      {/* Toast Notification */}
       {successToast && (
-        <div className="fixed top-6 right-6 z-50 animate-scaleUp max-w-md bg-emerald-950/95 border-2 border-emerald-400 text-white px-5 py-4 rounded-2xl shadow-[0_10px_30px_rgba(16,185,129,0.4)] backdrop-blur-xl flex items-center space-x-3">
-          <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-300">
-            <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+        <div className="fixed bottom-6 right-6 z-50 animate-bounce">
+          <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center space-x-3 border border-emerald-400">
+            <CheckCircle2 className="w-5 h-5 text-emerald-200" />
+            <span className="text-sm font-bold">{successToast}</span>
+            <button onClick={() => setSuccessToast(null)} className="text-emerald-200 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <div>
-            <p className="font-bold text-sm text-emerald-100">{successToast}</p>
-            <p className="text-xs text-emerald-300/80">Master student database updated permanently.</p>
-          </div>
-          <button
-            onClick={() => setSuccessToast(null)}
-            className="ml-auto text-emerald-400 hover:text-white p-1 rounded-lg"
-          >
-            <X className="w-4 h-4" />
-          </button>
         </div>
       )}
 
-      {/* Page Header */}
+      {/* Header Banner */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2.5">
             <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
               Hostel Master Student Database
             </h1>
-            <Badge variant="emerald">{students.length} Permanent Members</Badge>
+            <Badge variant="emerald">{students.length} Students</Badge>
           </div>
           <p className="text-sm text-emerald-300/80 mt-1">
-            Permanent registry of all boys hostel members. Stored records remain permanent across all pass generations.
+            Central persistent registry of all Boys Hostel-I members (Rooms 01–22). Auto-synchronized across all devices.
           </p>
         </div>
 
-        {/* Action Buttons */}
+        {/* Top Actions */}
         <div className="flex flex-wrap items-center gap-2.5">
-          <GlowingButton
-            variant="primary"
-            icon={UserPlus}
-            onClick={handleOpenAdd}
-            className="shadow-[0_0_20px_rgba(16,185,129,0.4)] hover:shadow-[0_0_28px_rgba(16,185,129,0.6)]"
-          >
+          <GlowingButton variant="primary" icon={UserPlus} onClick={handleOpenAdd}>
             + Add New Student
           </GlowingButton>
 
-          <GlowingButton
-            variant="secondary"
-            icon={Upload}
-            onClick={() => setIsImportModalOpen(true)}
-          >
-            Import Excel / CSV
+          <GlowingButton variant="accent" icon={Upload} onClick={() => setIsImportModalOpen(true)}>
+            Import Excel/CSV
           </GlowingButton>
 
-          <GlowingButton
-            variant="secondary"
-            icon={Download}
-            onClick={() => exportStudentsToCSV(students)}
-          >
-            Export CSV
-          </GlowingButton>
-
-          <GlowingButton
-            variant="secondary"
-            icon={Download}
+          <button
             onClick={() => exportStudentsToExcel(students)}
+            className="px-3 py-2 rounded-xl bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center space-x-1.5 transition-colors"
+            title="Download full database as Excel .xlsx"
           >
-            Export Excel
-          </GlowingButton>
+            <Download className="w-4 h-4" />
+            <span>Export Excel</span>
+          </button>
+
+          <button
+            onClick={() => exportStudentsToCSV(students)}
+            className="px-3 py-2 rounded-xl bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center space-x-1.5 transition-colors"
+            title="Download CSV for spreadsheet"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Export CSV</span>
+          </button>
         </div>
       </div>
 
       {/* Main Database Table Container */}
       <GlassCard className="p-6">
         
-        {/* Search & Filter Toolbar */}
+        {/* Filter Toolbar */}
         <div className="space-y-4 pb-6 border-b border-emerald-500/20">
           
-          {/* Room quick pills */}
+          {/* Quick Room filter chips */}
           <div>
-            <label className="text-xs font-bold text-emerald-300 uppercase tracking-wider block mb-2">
-              Filter by Room Number:
-            </label>
-            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-emerald-400">
+                Filter by Room ({uniqueRooms.length} Rooms Active):
+              </span>
+              {roomFilter && (
+                <button
+                  onClick={() => setRoomFilter('')}
+                  className="text-xs text-cyan-300 hover:underline flex items-center space-x-1 font-semibold"
+                >
+                  <span>Clear Room Filter (Show All)</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-1">
               <button
                 onClick={() => setRoomFilter('')}
-                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                  roomFilter === ''
-                    ? 'bg-emerald-500 text-white shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  !roomFilter
+                    ? 'bg-emerald-500 text-black shadow-md'
                     : 'bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/20'
                 }`}
               >
                 All Rooms ({students.length})
               </button>
 
-              {uniqueRooms.map((r) => {
-                const count = students.filter(
-                  (s) => s.roomNo === r || s.roomNo.replace(/^0+/, '') === r.replace(/^0+/, '')
-                ).length;
-                const isSelected =
-                  roomFilter === r ||
-                  roomFilter === `Room ${r}` ||
-                  roomFilter === `R-${r}` ||
-                  (roomFilter !== '' && roomFilter.replace(/[^0-9]/g, '') === r.replace(/[^0-9]/g, ''));
+              {uniqueRooms.map((room) => {
+                const roomClean = room.replace(/[^0-9]/g, '');
+                const count = students.filter((s) => {
+                  const sc = s.roomNo.replace(/[^0-9]/g, '');
+                  return s.roomNo === room || (roomClean && sc && (sc === roomClean || sc.padStart(2, '0') === roomClean.padStart(2, '0')));
+                }).length;
+                const isSelected = roomFilter === room;
 
                 return (
                   <button
-                    key={r}
-                    onClick={() => setRoomFilter(isSelected ? '' : r)}
+                    key={room}
+                    onClick={() => setRoomFilter(isSelected ? '' : room)}
                     className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
                       isSelected
-                        ? 'bg-cyan-500 text-white shadow-[0_0_12px_rgba(56,189,248,0.5)]'
-                        : 'bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300/90 border border-emerald-500/20'
+                        ? 'bg-emerald-500 text-black shadow-md'
+                        : 'bg-emerald-950/50 hover:bg-emerald-900 text-emerald-200 border border-emerald-500/25'
                     }`}
                   >
-                    R-{r} ({count})
+                    Room {room} ({count})
                   </button>
                 );
               })}
             </div>
           </div>
 
-          {/* Search Inputs Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-            <div className="sm:col-span-4 relative">
-              <Building className="w-4 h-4 absolute left-3 top-3 text-emerald-400" />
-              <input
-                type="text"
-                placeholder="Search Room (e.g. 1 or Room 1)"
-                value={roomFilter}
-                onChange={(e) => setRoomFilter(e.target.value)}
-                className="w-full pl-9 pr-3 py-2.5 bg-[#021d17] border border-emerald-500/30 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 transition-all placeholder:text-gray-500"
-              />
-            </div>
-
-            <div className="sm:col-span-4 relative">
+          {/* Search, Dept & Year select */}
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2">
+            <div className="sm:col-span-6 relative">
               <Search className="w-4 h-4 absolute left-3 top-3 text-emerald-400" />
               <input
                 type="text"
-                placeholder="Search Student Name / Phone (e.g. Krish)"
+                placeholder="Search student name, room (e.g. 10), parent phone, or S.No..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-3 py-2.5 bg-[#021d17] border border-emerald-500/30 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 transition-all placeholder:text-gray-500"
+                className="w-full pl-9 pr-3 py-2 bg-[#021d17] border border-emerald-500/30 rounded-xl text-xs sm:text-sm text-white placeholder-emerald-400/40 focus:outline-none focus:border-emerald-400"
               />
             </div>
 
-            <div className="sm:col-span-2">
+            <div className="sm:col-span-3">
               <select
                 value={yearFilter}
                 onChange={(e) => setYearFilter(e.target.value)}
-                className="w-full py-2.5 px-3 bg-[#021d17] border border-emerald-500/30 rounded-xl text-xs font-semibold text-emerald-200 focus:outline-none focus:border-emerald-400"
+                className="w-full py-2 px-3 bg-[#021d17] border border-emerald-500/30 rounded-xl text-xs font-semibold text-emerald-200 focus:outline-none focus:border-emerald-400"
               >
-                <option value="ALL">All Years</option>
-                <option value="I">I Year</option>
+                <option value="ALL">All Academic Years</option>
                 <option value="II">II Year</option>
                 <option value="III">III Year</option>
                 <option value="IV">IV Year</option>
+                <option value="I">I Year</option>
               </select>
             </div>
 
-            <div className="sm:col-span-2">
+            <div className="sm:col-span-3">
               <select
                 value={deptFilter}
                 onChange={(e) => setDeptFilter(e.target.value)}
-                className="w-full py-2.5 px-3 bg-[#021d17] border border-emerald-500/30 rounded-xl text-xs font-semibold text-emerald-200 focus:outline-none focus:border-emerald-400"
+                className="w-full py-2 px-3 bg-[#021d17] border border-emerald-500/30 rounded-xl text-xs font-semibold text-emerald-200 focus:outline-none focus:border-emerald-400"
               >
                 <option value="ALL">All Departments</option>
                 {COMMON_DEPTS.map((dept) => (
@@ -513,18 +486,18 @@ export default function StudentsDatabasePage() {
 
         </div>
 
-        {/* Database Records Table */}
-        <div className="border border-emerald-500/20 rounded-2xl overflow-hidden bg-[#03211b]/90 mt-6 shadow-inner">
-          <div className="overflow-x-auto">
+        {/* Database Table (Always sorted Room-wise numerically with S.No) */}
+        <div className="mt-6 border border-emerald-500/20 rounded-2xl overflow-hidden bg-[#03211b]/90 shadow-xl">
+          <div className="overflow-x-auto max-h-[550px] overflow-y-auto">
             <table className="w-full text-left text-xs sm:text-sm">
-              <thead className="bg-[#063b31] text-emerald-300 uppercase font-bold text-[11px] border-b border-emerald-500/30">
+              <thead className="sticky top-0 bg-[#053229] text-emerald-300 uppercase font-bold text-[11px] border-b border-emerald-500/30 z-10">
                 <tr>
-                  <th className="py-3.5 px-3 text-center w-16">S.No</th>
-                  <th className="py-3.5 px-3 text-center w-20">Room</th>
-                  <th className="py-3.5 px-4">Student Name</th>
+                  <th className="py-3.5 px-3 text-center w-14">S.No</th>
+                  <th className="py-3.5 px-3 text-center w-24">Room No</th>
+                  <th className="py-3.5 px-4 font-bold">Student Name</th>
                   <th className="py-3.5 px-3 text-center">Department</th>
                   <th className="py-3.5 px-3 text-center">Year</th>
-                  <th className="py-3.5 px-4 text-center">Parent Phone No.</th>
+                  <th className="py-3.5 px-4 text-center">Parent Phone Number</th>
                   <th className="py-3.5 px-4 text-center w-28">Actions</th>
                 </tr>
               </thead>
@@ -532,57 +505,62 @@ export default function StudentsDatabasePage() {
                 {filteredStudents.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-12 text-center text-gray-400">
-                      <p className="font-semibold text-emerald-200 text-base">No students match current search query</p>
-                      <p className="text-xs text-gray-400 mt-1.5">
-                        Try resetting your search filters or click below to add a student.
+                      <Users className="w-10 h-10 mx-auto text-emerald-500/40 mb-2" />
+                      <p className="font-bold text-white text-base">No students found</p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Try adjusting your search criteria or add a new student.
                       </p>
-                      <div className="mt-4">
-                        <GlowingButton variant="primary" size="sm" icon={UserPlus} onClick={handleOpenAdd}>
-                          + Add New Student
-                        </GlowingButton>
-                      </div>
                     </td>
                   </tr>
                 ) : (
-                  filteredStudents.map((student, idx) => (
+                  filteredStudents.map((student) => (
                     <tr
                       key={student.id}
-                      className="hover:bg-emerald-900/30 transition-colors duration-150 group"
+                      className="hover:bg-emerald-900/30 transition-colors group text-gray-200"
                     >
-                      <td className="py-3 px-3 text-center font-mono text-emerald-300/80 font-bold">
-                        {student.sNo || idx + 1}
+                      <td className="py-3 px-3 text-center font-mono text-gray-400 font-bold">
+                        {student.sNo}
                       </td>
+
                       <td className="py-3 px-3 text-center">
-                        <span className="px-2.5 py-1 rounded-lg bg-emerald-950 border border-emerald-500/40 text-emerald-300 font-bold text-xs group-hover:border-emerald-400 transition-colors">
-                          {student.roomNo}
+                        <span className="font-extrabold text-xs bg-emerald-950 text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/40 shadow-sm">
+                          Room {student.roomNo}
                         </span>
                       </td>
-                      <td className="py-3 px-4 font-bold text-white tracking-wide">
+
+                      <td className="py-3 px-4 font-bold text-white tracking-wide text-sm">
                         {student.name}
                       </td>
+
                       <td className="py-3 px-3 text-center">
-                        <span className="px-2.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 text-xs font-semibold border border-emerald-500/20">
+                        <span className="text-xs font-mono font-semibold text-cyan-300 bg-cyan-950/70 px-2 py-0.5 rounded border border-cyan-500/30">
                           {student.department}
                         </span>
                       </td>
-                      <td className="py-3 px-3 text-center text-xs font-semibold text-gray-300">
-                        {student.year} Year
+
+                      <td className="py-3 px-3 text-center">
+                        <Badge variant={student.year === 'III' ? 'emerald' : 'cyan'}>
+                          {student.year} Year
+                        </Badge>
                       </td>
-                      <td className="py-3 px-4 text-center font-mono text-xs text-emerald-300 font-medium">
-                        {student.parentPhone || <span className="text-gray-500 italic">Not Provided</span>}
+
+                      <td className="py-3 px-4 text-center font-mono text-xs text-emerald-300">
+                        {student.parentPhone || '—'}
                       </td>
+
                       <td className="py-3 px-4 text-center">
                         <div className="flex items-center justify-center space-x-1.5">
                           <button
                             onClick={() => handleOpenEdit(student)}
-                            className="p-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 hover:text-white border border-emerald-500/30 transition-colors"
+                            className="p-1.5 rounded-lg bg-emerald-950 hover:bg-emerald-800 text-emerald-300 hover:text-white transition-colors"
                             title="Edit Student"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
+
                           <button
                             onClick={() => handleOpenDelete(student)}
-                            className="p-1.5 rounded-lg bg-red-950/80 hover:bg-red-900 text-red-300 hover:text-white border border-red-500/30 transition-colors"
+                            className="p-1.5 rounded-lg bg-red-950/70 hover:bg-red-900 text-red-300 hover:text-red-100 transition-colors"
                             title="Delete Student"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -596,86 +574,74 @@ export default function StudentsDatabasePage() {
             </table>
           </div>
 
-          {/* Table Footer Status */}
-          <div className="p-4 bg-[#042820] border-t border-emerald-500/20 flex flex-col sm:flex-row items-center justify-between text-xs text-emerald-300 gap-2">
-            <span>
-              Showing {filteredStudents.length} of {students.length} Registered Students
-            </span>
-            <span className="text-gray-400">
-              VSB Engineering College • Boys Hostel-I Master Database
-            </span>
+          {/* Table Footer Stats */}
+          <div className="bg-[#021813] px-6 py-3 flex flex-col sm:flex-row items-center justify-between text-xs text-gray-400 border-t border-emerald-500/20 gap-2">
+            <div>
+              Showing <span className="font-bold text-white">{filteredStudents.length}</span> of{' '}
+              <span className="font-bold text-white">{students.length}</span> students across{' '}
+              <span className="font-bold text-emerald-400">{uniqueRooms.length}</span> rooms.
+            </div>
+
+            <div className="flex items-center space-x-4">
+              <button
+                onClick={() => setIsResetModalOpen(true)}
+                className="text-xs text-red-400/80 hover:text-red-300 flex items-center space-x-1"
+                title="Reset database to default 97 students"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset to Factory 97 Students</span>
+              </button>
+            </div>
           </div>
         </div>
 
       </GlassCard>
 
-      {/* Modal: + Add New Student */}
+      {/* ADD STUDENT MODAL */}
       <Modal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
-        title="+ Add New Student"
-        subtitle="Add a student record permanently to the master hostel database"
+        title="Add New Student to Master Registry"
+        subtitle="S.No is automatically calculated and the student is grouped inside their room number."
       >
-        <form onSubmit={handleSaveNew} className="space-y-4">
+        <form onSubmit={handleSaveAdd} className="space-y-4">
           
-          {/* Duplicate Error Banner */}
           {formErrors.duplicate && (
-            <div className="p-3.5 rounded-xl bg-red-950/80 border border-red-500/50 flex items-start space-x-2.5 text-red-200 text-xs animate-scaleUp">
-              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold text-red-100">{formErrors.duplicate}</p>
-                <p className="text-[11px] text-red-300/90 mt-0.5">
-                  A student with the same name or details already exists in this hostel database.
-                </p>
-              </div>
+            <div className="p-3 rounded-xl bg-red-950/60 border border-red-500/40 text-red-200 text-xs flex items-center space-x-2">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+              <span>{formErrors.duplicate}</span>
             </div>
           )}
 
-          {/* Student Name */}
           <div>
-            <label className="text-xs font-bold text-emerald-200 block mb-1">
-              Student Name <span className="text-red-400">*</span>
+            <label className="text-xs font-semibold text-gray-300 block mb-1">
+              Student Name (Full Name): *
             </label>
             <input
               type="text"
               required
-              placeholder="e.g. Krish"
+              placeholder="e.g. PARANIDARAN K"
               value={formData.name}
-              onChange={(e) => {
-                setFormData({ ...formData, name: e.target.value });
-                if (formErrors.name || formErrors.duplicate) {
-                  setFormErrors({ ...formErrors, name: undefined, duplicate: undefined });
-                }
-              }}
-              className={`w-full px-3.5 py-2.5 bg-[#021d17] border rounded-xl text-sm text-white placeholder:text-gray-500 focus:outline-none transition-colors ${
-                formErrors.name ? 'border-red-500 focus:border-red-400' : 'border-emerald-500/40 focus:border-emerald-400'
-              }`}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 uppercase font-semibold"
             />
             {formErrors.name && (
               <p className="text-[11px] text-red-400 mt-1">{formErrors.name}</p>
             )}
           </div>
 
-          {/* Room Number and Department */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-bold text-emerald-200 block mb-1">
-                Room Number <span className="text-red-400">*</span>
+              <label className="text-xs font-semibold text-gray-300 block mb-1">
+                Room Number: *
               </label>
               <input
                 type="text"
                 required
-                placeholder="e.g. 1"
+                placeholder="e.g. 8 or 10"
                 value={formData.roomNo}
-                onChange={(e) => {
-                  setFormData({ ...formData, roomNo: e.target.value });
-                  if (formErrors.roomNo || formErrors.duplicate) {
-                    setFormErrors({ ...formErrors, roomNo: undefined, duplicate: undefined });
-                  }
-                }}
-                className={`w-full px-3.5 py-2.5 bg-[#021d17] border rounded-xl text-sm text-white placeholder:text-gray-500 focus:outline-none transition-colors ${
-                  formErrors.roomNo ? 'border-red-500 focus:border-red-400' : 'border-emerald-500/40 focus:border-emerald-400'
-                }`}
+                onChange={(e) => setFormData({ ...formData, roomNo: e.target.value })}
+                className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 font-bold"
               />
               {formErrors.roomNo && (
                 <p className="text-[11px] text-red-400 mt-1">{formErrors.roomNo}</p>
@@ -683,79 +649,50 @@ export default function StudentsDatabasePage() {
             </div>
 
             <div>
-              <label className="text-xs font-bold text-emerald-200 block mb-1">
-                Department <span className="text-red-400">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. CSE"
-                value={formData.department}
-                onChange={(e) => {
-                  setFormData({ ...formData, department: e.target.value });
-                  if (formErrors.department) {
-                    setFormErrors({ ...formErrors, department: undefined });
-                  }
-                }}
-                className={`w-full px-3.5 py-2.5 bg-[#021d17] border rounded-xl text-sm text-white placeholder:text-gray-500 focus:outline-none transition-colors ${
-                  formErrors.department ? 'border-red-500 focus:border-red-400' : 'border-emerald-500/40 focus:border-emerald-400'
-                }`}
-              />
-              {/* Quick Dept suggestions */}
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {COMMON_DEPTS.slice(0, 5).map((d) => (
-                  <button
-                    type="button"
-                    key={d}
-                    onClick={() => setFormData({ ...formData, department: d })}
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/20"
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
-              {formErrors.department && (
-                <p className="text-[11px] text-red-400 mt-1">{formErrors.department}</p>
-              )}
-            </div>
-          </div>
-
-          {/* Year and Parent Phone */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div>
-              <label className="text-xs font-bold text-emerald-200 block mb-1">
-                Year <span className="text-red-400">*</span>
+              <label className="text-xs font-semibold text-gray-300 block mb-1">
+                Academic Year: *
               </label>
               <select
                 value={formData.year}
                 onChange={(e) => setFormData({ ...formData, year: e.target.value as any })}
-                className="w-full px-3.5 py-2.5 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm font-semibold text-white focus:outline-none focus:border-emerald-400"
+                className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 font-semibold"
               >
                 <option value="III">III Year</option>
                 <option value="II">II Year</option>
-                <option value="I">I Year</option>
                 <option value="IV">IV Year</option>
+                <option value="I">I Year</option>
               </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-gray-300 block mb-1">
+                Department: *
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. CSE, IT, ECE"
+                value={formData.department}
+                onChange={(e) => setFormData({ ...formData, department: e.target.value.toUpperCase() })}
+                className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 font-semibold uppercase"
+              />
+              {formErrors.department && (
+                <p className="text-[11px] text-red-400 mt-1">{formErrors.department}</p>
+              )}
             </div>
 
             <div>
-              <label className="text-xs font-bold text-emerald-200 block mb-1">
-                Parent Phone Number <span className="text-red-400">*</span>
+              <label className="text-xs font-semibold text-gray-300 block mb-1">
+                Parent Phone Number:
               </label>
               <input
                 type="tel"
-                required
                 placeholder="e.g. 9876543210"
                 value={formData.parentPhone}
-                onChange={(e) => {
-                  setFormData({ ...formData, parentPhone: e.target.value });
-                  if (formErrors.parentPhone || formErrors.duplicate) {
-                    setFormErrors({ ...formErrors, parentPhone: undefined, duplicate: undefined });
-                  }
-                }}
-                className={`w-full px-3.5 py-2.5 bg-[#021d17] border rounded-xl text-sm text-white placeholder:text-gray-500 focus:outline-none font-mono transition-colors ${
-                  formErrors.parentPhone ? 'border-red-500 focus:border-red-400' : 'border-emerald-500/40 focus:border-emerald-400'
-                }`}
+                onChange={(e) => setFormData({ ...formData, parentPhone: e.target.value })}
+                className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 font-mono"
               />
               {formErrors.parentPhone && (
                 <p className="text-[11px] text-red-400 mt-1">{formErrors.parentPhone}</p>
@@ -763,115 +700,117 @@ export default function StudentsDatabasePage() {
             </div>
           </div>
 
-          {/* Automatic S.No Notice */}
-          <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/20 flex items-center space-x-2 text-xs text-emerald-300/90">
-            <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>
-              S.No will be automatically calculated and permanently assigned by the system.
-            </span>
-          </div>
-
-          {/* Form Actions */}
           <div className="flex items-center justify-end space-x-3 pt-4 border-t border-emerald-500/20">
             <button
               type="button"
               onClick={() => setIsAddModalOpen(false)}
-              className="px-5 py-2.5 rounded-xl text-xs font-bold text-gray-300 hover:text-white bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-500/20 transition-all"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-300 hover:text-white"
             >
               Cancel
             </button>
-            <GlowingButton variant="primary" size="md" type="submit">
-              Add Student
+            <GlowingButton variant="primary" size="md" type="submit" loading={isSubmitting}>
+              Save Student to Central Database
             </GlowingButton>
           </div>
         </form>
       </Modal>
 
-      {/* Modal: Edit Student */}
+      {/* EDIT STUDENT MODAL */}
       <Modal
         isOpen={isEditModalOpen}
         onClose={() => setIsEditModalOpen(false)}
-        title="Edit Student Information"
-        subtitle={`Updating student: ${selectedStudent?.name}`}
+        title="Edit Student Details"
+        subtitle={`Updating student in Room ${formData.roomNo}. All changes are broadcast live.`}
       >
         <form onSubmit={handleSaveEdit} className="space-y-4">
           
           {formErrors.duplicate && (
-            <div className="p-3.5 rounded-xl bg-red-950/80 border border-red-500/50 flex items-start space-x-2.5 text-red-200 text-xs animate-scaleUp">
-              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold text-red-100">{formErrors.duplicate}</p>
-              </div>
+            <div className="p-3 rounded-xl bg-red-950/60 border border-red-500/40 text-red-200 text-xs flex items-center space-x-2">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+              <span>{formErrors.duplicate}</span>
             </div>
           )}
 
           <div>
-            <label className="text-xs font-bold text-emerald-200 block mb-1">
-              Student Full Name:
+            <label className="text-xs font-semibold text-gray-300 block mb-1">
+              Student Name: *
             </label>
             <input
               type="text"
               required
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400"
+              className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 uppercase font-semibold"
             />
+            {formErrors.name && (
+              <p className="text-[11px] text-red-400 mt-1">{formErrors.name}</p>
+            )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3.5">
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-bold text-emerald-200 block mb-1">
-                Room Number:
+              <label className="text-xs font-semibold text-gray-300 block mb-1">
+                Room Number: *
               </label>
               <input
                 type="text"
                 required
                 value={formData.roomNo}
                 onChange={(e) => setFormData({ ...formData, roomNo: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400"
+                className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 font-bold"
               />
+              {formErrors.roomNo && (
+                <p className="text-[11px] text-red-400 mt-1">{formErrors.roomNo}</p>
+              )}
             </div>
+
             <div>
-              <label className="text-xs font-bold text-emerald-200 block mb-1">
-                Department:
+              <label className="text-xs font-semibold text-gray-300 block mb-1">
+                Academic Year: *
+              </label>
+              <select
+                value={formData.year}
+                onChange={(e) => setFormData({ ...formData, year: e.target.value as any })}
+                className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 font-semibold"
+              >
+                <option value="III">III Year</option>
+                <option value="II">II Year</option>
+                <option value="IV">IV Year</option>
+                <option value="I">I Year</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-gray-300 block mb-1">
+                Department: *
               </label>
               <input
                 type="text"
                 required
                 value={formData.department}
-                onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400"
+                onChange={(e) => setFormData({ ...formData, department: e.target.value.toUpperCase() })}
+                className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 font-semibold uppercase"
               />
+              {formErrors.department && (
+                <p className="text-[11px] text-red-400 mt-1">{formErrors.department}</p>
+              )}
             </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-3.5">
             <div>
-              <label className="text-xs font-bold text-emerald-200 block mb-1">
-                Year:
-              </label>
-              <select
-                value={formData.year}
-                onChange={(e) => setFormData({ ...formData, year: e.target.value as any })}
-                className="w-full px-3.5 py-2.5 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400"
-              >
-                <option value="III">III Year</option>
-                <option value="II">II Year</option>
-                <option value="I">I Year</option>
-                <option value="IV">IV Year</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-bold text-emerald-200 block mb-1">
-                Parent Phone:
+              <label className="text-xs font-semibold text-gray-300 block mb-1">
+                Parent Phone Number:
               </label>
               <input
                 type="tel"
-                required
                 value={formData.parentPhone}
                 onChange={(e) => setFormData({ ...formData, parentPhone: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 font-mono"
+                className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/40 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400 font-mono"
               />
+              {formErrors.parentPhone && (
+                <p className="text-[11px] text-red-400 mt-1">{formErrors.parentPhone}</p>
+              )}
             </div>
           </div>
 
@@ -879,38 +818,37 @@ export default function StudentsDatabasePage() {
             <button
               type="button"
               onClick={() => setIsEditModalOpen(false)}
-              className="px-4 py-2 rounded-xl text-xs font-bold text-gray-300 hover:text-white"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-300 hover:text-white"
             >
               Cancel
             </button>
-            <GlowingButton variant="primary" size="md" type="submit">
-              Update Student
+            <GlowingButton variant="primary" size="md" type="submit" loading={isSubmitting}>
+              Update &amp; Sync to All Devices
             </GlowingButton>
           </div>
         </form>
       </Modal>
 
-      {/* Modal: Delete Confirmation */}
+      {/* DELETE CONFIRMATION MODAL */}
       <Modal
         isOpen={isDeleteModalOpen}
         onClose={() => setIsDeleteModalOpen(false)}
         title="Confirm Student Deletion"
       >
         <div className="space-y-4">
-          <div className="p-4 rounded-xl bg-red-950/40 border border-red-500/30 flex items-start space-x-3 text-red-200 text-sm">
-            <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-bold text-white">
-                Are you sure you want to remove {selectedStudent?.name}?
-              </p>
-              <p className="text-xs text-red-300 mt-1">
-                Room {selectedStudent?.roomNo} • {selectedStudent?.department} • Parent: {selectedStudent?.parentPhone}
-              </p>
-            </div>
-          </div>
+          <p className="text-sm text-gray-300">
+            Are you sure you want to delete student{' '}
+            <span className="font-bold text-white">{selectedStudent?.name}</span> from{' '}
+            <span className="font-bold text-white">Room {selectedStudent?.roomNo}</span>?
+          </p>
 
-          <div className="flex items-center justify-end space-x-3 pt-2">
+          <p className="text-xs text-amber-300">
+            This will update the central database and remove the student from all connected devices immediately.
+          </p>
+
+          <div className="flex items-center justify-end space-x-3 pt-4 border-t border-emerald-500/20">
             <button
+              type="button"
               onClick={() => setIsDeleteModalOpen(false)}
               className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-300 hover:text-white"
             >
@@ -919,6 +857,7 @@ export default function StudentsDatabasePage() {
             <GlowingButton
               variant="danger"
               size="md"
+              loading={isSubmitting}
               onClick={handleConfirmDelete}
             >
               Delete Student
@@ -927,118 +866,133 @@ export default function StudentsDatabasePage() {
         </div>
       </Modal>
 
-      {/* Modal: Excel Bulk Import */}
+      {/* RESET TO FACTORY DEFAULT MODAL */}
+      <Modal
+        isOpen={isResetModalOpen}
+        onClose={() => setIsResetModalOpen(false)}
+        title="Reset Master Database to Default?"
+      >
+        <div className="space-y-4">
+          <div className="p-3.5 rounded-xl bg-red-950/60 border border-red-500/40 text-red-200 text-xs flex items-start space-x-3">
+            <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-white text-sm">Warning: Reset Master Registry</p>
+              <p className="text-xs text-red-300 mt-1">
+                This will overwrite the central database with the official roster of 97 students for VSB Boys Hostel-I (Rooms 01–22) and broadcast the update to all devices.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end space-x-3 pt-3 border-t border-emerald-500/20">
+            <button
+              onClick={() => setIsResetModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-300 hover:text-white"
+            >
+              Cancel
+            </button>
+            <GlowingButton variant="danger" size="md" loading={isSubmitting} onClick={handleResetToDefault}>
+              Confirm Reset
+            </GlowingButton>
+          </div>
+        </div>
+      </Modal>
+
+      {/* IMPORT EXCEL/CSV MODAL */}
       <Modal
         isOpen={isImportModalOpen}
-        onClose={() => {
-          setIsImportModalOpen(false);
-          setImportStatus(null);
-        }}
-        title="Import Students from Excel / CSV"
-        subtitle="Upload your hostel student roster in .xlsx or .csv format"
+        onClose={() => setIsImportModalOpen(false)}
+        title="Import Students from Excel or CSV"
+        subtitle="Upload your roster spreadsheet with columns: Room No, Name, Department, Year, Parent Phone."
       >
         <div className="space-y-5">
-          <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-500/30 space-y-2 text-xs text-emerald-200">
-            <p className="font-bold text-white flex items-center space-x-1.5">
-              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-              <span>Supported Columns:</span>
-            </p>
-            <p>
-              Room No, Student Name, Department, Year (II/III), Parent Phone Number
-            </p>
+          
+          <div className="flex items-center justify-between p-3 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-xs">
+            <span className="text-emerald-200">Need a sample format template?</span>
             <button
               onClick={downloadSampleExcelTemplate}
-              className="mt-2 text-cyan-300 hover:underline font-bold flex items-center space-x-1"
+              className="text-cyan-300 hover:text-cyan-200 font-bold underline flex items-center space-x-1"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Download Sample CSV / Excel Template</span>
+              <span>Download Template</span>
             </button>
           </div>
 
-          {/* Import Mode Selector */}
-          <div className="flex items-center space-x-4 p-3 rounded-xl bg-[#03221c] border border-emerald-500/20 text-xs">
-            <span className="font-bold text-gray-300">Import Mode:</span>
-            <label className="flex items-center space-x-1.5 cursor-pointer text-emerald-200">
-              <input
-                type="radio"
-                name="importMode"
-                value="append"
-                checked={importMode === 'append'}
-                onChange={() => setImportMode('append')}
-                className="text-emerald-500 focus:ring-emerald-400"
-              />
-              <span>Append Records (Skip Duplicates)</span>
+          <div>
+            <label className="text-xs font-semibold text-gray-300 block mb-2">
+              Import Mode:
             </label>
-            <label className="flex items-center space-x-1.5 cursor-pointer text-emerald-200">
-              <input
-                type="radio"
-                name="importMode"
-                value="replace"
-                checked={importMode === 'replace'}
-                onChange={() => setImportMode('replace')}
-                className="text-emerald-500 focus:ring-emerald-400"
-              />
-              <span>Replace Database ({students.length} existing)</span>
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className={`p-3 rounded-xl border text-xs cursor-pointer transition-colors ${
+                importMode === 'append' ? 'bg-emerald-950 border-emerald-400 text-white' : 'bg-[#021d17] border-emerald-500/20 text-gray-400'
+              }`}>
+                <input
+                  type="radio"
+                  name="mode"
+                  value="append"
+                  checked={importMode === 'append'}
+                  onChange={() => setImportMode('append')}
+                  className="hidden"
+                />
+                <span className="font-bold block text-emerald-300">Append New</span>
+                <span className="text-[11px] text-gray-400">Add new students without overwriting existing</span>
+              </label>
+
+              <label className={`p-3 rounded-xl border text-xs cursor-pointer transition-colors ${
+                importMode === 'replace' ? 'bg-emerald-950 border-emerald-400 text-white' : 'bg-[#021d17] border-emerald-500/20 text-gray-400'
+              }`}>
+                <input
+                  type="radio"
+                  name="mode"
+                  value="replace"
+                  checked={importMode === 'replace'}
+                  onChange={() => setImportMode('replace')}
+                  className="hidden"
+                />
+                <span className="font-bold block text-cyan-300">Replace All</span>
+                <span className="text-[11px] text-gray-400">Replace entire central student roster</span>
+              </label>
+            </div>
           </div>
 
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-emerald-500/40 hover:border-emerald-400 p-8 rounded-2xl text-center cursor-pointer bg-[#021d17] transition-all group"
-          >
+          <div>
+            <label className="text-xs font-semibold text-gray-300 block mb-2">
+              Select Excel (.xlsx) or CSV (.csv) file:
+            </label>
             <input
-              type="file"
               ref={fileInputRef}
-              onChange={handleFileUpload}
-              accept=".xlsx, .xls, .csv"
-              className="hidden"
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={handleFileChange}
+              className="w-full text-xs text-emerald-300 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500 cursor-pointer bg-[#021d17] border border-emerald-500/30 rounded-xl p-2"
             />
-            <Upload className="w-10 h-10 mx-auto text-emerald-400 group-hover:scale-110 transition-transform duration-300 mb-2" />
-            <p className="text-sm font-bold text-white">
-              Click to select CSV (e.g. hostel_members_97.csv) or Excel file
-            </p>
-            <p className="text-xs text-gray-400 mt-1">
-              {importMode === 'replace'
-                ? 'Will replace current database with imported students.'
-                : 'Will append new students to current database without creating duplicates.'}
-            </p>
           </div>
 
           {importStatus && (
-            <div className="p-3 rounded-xl bg-[#042820] border border-emerald-500/30 text-xs">
-              {importStatus.loading ? (
-                <p className="text-emerald-300 animate-pulse">Parsing and importing file...</p>
-              ) : importStatus.errors.length > 0 ? (
-                <div className="space-y-1 text-red-300">
-                  <p className="font-bold">Errors / Notices:</p>
-                  {importStatus.errors.map((err, i) => (
-                    <p key={i}>• {err}</p>
-                  ))}
-                  {importStatus.successCount > 0 && (
-                    <p className="text-emerald-300 font-bold mt-2">
-                      Successfully imported {importStatus.successCount} new students!
-                    </p>
-                  )}
-                </div>
-              ) : (
+            <div className="p-3.5 rounded-xl bg-[#022019] border border-emerald-500/30 text-xs space-y-2">
+              {importStatus.loading && <p className="text-cyan-300 font-semibold">Processing spreadsheet...</p>}
+              {importStatus.successCount > 0 && (
                 <p className="text-emerald-300 font-bold flex items-center space-x-1.5">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>Successfully imported {importStatus.successCount} students!</span>
+                  <span>Successfully processed {importStatus.successCount} student records!</span>
                 </p>
+              )}
+              {importStatus.errors.length > 0 && (
+                <div className="text-amber-300 space-y-1">
+                  <p className="font-semibold">Notes / Skipped rows:</p>
+                  <ul className="list-disc list-inside text-[11px] text-gray-400 max-h-24 overflow-y-auto">
+                    {importStatus.errors.map((err, i) => (
+                      <li key={i}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
           )}
 
-          <div className="flex justify-end pt-2">
-            <button
-              onClick={() => {
-                setIsImportModalOpen(false);
-                setImportStatus(null);
-              }}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-300 hover:text-white"
-            >
-              Close
-            </button>
+          <div className="flex items-center justify-end space-x-3 pt-3 border-t border-emerald-500/20">
+            <GlowingButton variant="primary" size="md" onClick={() => setIsImportModalOpen(false)}>
+              Done
+            </GlowingButton>
           </div>
         </div>
       </Modal>

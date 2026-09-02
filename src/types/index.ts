@@ -7,6 +7,9 @@ export interface Student {
   year: 'II' | 'III' | 'IV' | 'I';
   parentPhone: string;
   isActive?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  version?: number;
 }
 
 export interface GatePass {
@@ -21,6 +24,7 @@ export interface GatePass {
   studentCount: number;
   students: Student[];
   roomsIncluded: string[];
+  includeParentPhone?: boolean;
   generatedBy: string; // e.g. "Warden (Boys Hostel-I)"
   notes?: string;
   createdAt: string;
@@ -41,4 +45,22 @@ export interface FilterOptions {
   room: string;
   department: string;
   year: string;
+}
+
+export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
+
+export interface RealtimeEventPayload<T = unknown> {
+  type:
+    | 'INIT_SYNC'
+    | 'STUDENT_CREATED'
+    | 'STUDENT_UPDATED'
+    | 'STUDENT_DELETED'
+    | 'STUDENTS_BATCH_SYNC'
+    | 'PASS_CREATED'
+    | 'PASS_DELETED'
+    | 'SETTINGS_UPDATED'
+    | 'PING';
+  data?: T;
+  timestamp: string;
+  sourceSessionId?: string;
 }

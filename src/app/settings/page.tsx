@@ -13,16 +13,11 @@ import {
   CheckCircle2,
   AlertCircle,
   FileCheck2,
+  Lock,
+  KeyRound,
 } from 'lucide-react';
 import { HostelInfo } from '@/types';
-import {
-  getHostelInfo,
-  saveHostelInfo,
-  getStudents,
-  resetMasterDatabase,
-  saveStudents,
-  getGatePasses,
-} from '@/lib/storage';
+import { useRealtime } from '@/context/RealtimeContext';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { GlowingButton } from '@/components/ui/GlowingButton';
 import { Badge } from '@/components/ui/Badge';
@@ -30,42 +25,60 @@ import { Modal } from '@/components/ui/Modal';
 import { saveBlobFile } from '@/lib/fileSaver';
 
 export default function SettingsPage() {
-  const [info, setInfo] = useState<HostelInfo>(getHostelInfo());
+  const {
+    hostelInfo,
+    updateHostelInfo,
+    students,
+    passes,
+    resetMasterDatabase,
+    bulkImportStudents,
+    changePassword,
+  } = useRealtime();
+
+  const [info, setInfo] = useState<HostelInfo>(hostelInfo);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
-  const [stats, setStats] = useState({ totalStudents: 97, totalPasses: 2 });
+
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [isChangingPass, setIsChangingPass] = useState(false);
 
   useEffect(() => {
-    setInfo(getHostelInfo());
-    const students = getStudents();
-    const passes = getGatePasses();
-    setStats({ totalStudents: students.length, totalPasses: passes.length });
-  }, []);
+    setInfo(hostelInfo);
+  }, [hostelInfo]);
 
-  const handleSaveInfo = (e: React.FormEvent) => {
+  const handleSaveInfo = async (e: React.FormEvent) => {
     e.preventDefault();
-    saveHostelInfo(info);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    setIsSaving(true);
+    const res = await updateHostelInfo(info);
+    setIsSaving(false);
+    if (res.success) {
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } else {
+      alert(res.error || 'Failed to update settings.');
+    }
   };
 
-  const handleResetToDefault = () => {
-    resetMasterDatabase();
+  const handleResetToDefault = async () => {
+    const res = await resetMasterDatabase();
     setIsResetModalOpen(false);
-    const updated = getStudents();
-    setStats((prev) => ({ ...prev, totalStudents: updated.length }));
-    alert('Master student database reset to default 97 students for VSB Boys Hostel-I.');
+    if (res.success) {
+      alert('Master student database reset to default 97 students for VSB Boys Hostel-I.');
+    } else {
+      alert(res.error || 'Failed to reset database.');
+    }
   };
 
   const handleBackupDatabase = () => {
-    const students = getStudents();
-    const passes = getGatePasses();
-    const hostel = getHostelInfo();
-
     const backup = {
       timestamp: new Date().toISOString(),
       college: 'VSB Engineering College',
-      hostelInfo: hostel,
+      hostelInfo: info,
       students,
       gatePasses: passes,
     };
@@ -81,14 +94,17 @@ export default function SettingsPage() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
         if (json.students && Array.isArray(json.students)) {
-          saveStudents(json.students);
-          if (json.hostelInfo) saveHostelInfo(json.hostelInfo);
-          setStats((prev) => ({ ...prev, totalStudents: json.students.length }));
-          alert(`Successfully restored backup with ${json.students.length} students.`);
+          const res = await bulkImportStudents(json.students, 'replace');
+          if (json.hostelInfo) await updateHostelInfo(json.hostelInfo);
+          if (res.success) {
+            alert(`Successfully restored backup with ${json.students.length} students into central database.`);
+          } else {
+            alert(res.error || 'Failed to restore backup.');
+          }
         } else {
           alert('Invalid backup format.');
         }
@@ -97,6 +113,25 @@ export default function SettingsPage() {
       }
     };
     reader.readAsText(file);
+  };
+
+  const handleChangePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError(null);
+    setPasswordSuccess(null);
+    setIsChangingPass(true);
+
+    const res = await changePassword(currentPassword, newPassword);
+    setIsChangingPass(false);
+
+    if (res.success) {
+      setPasswordSuccess('Administrator password changed successfully across all devices.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setTimeout(() => setPasswordSuccess(null), 4000);
+    } else {
+      setPasswordError(res.error || 'Failed to update password.');
+    }
   };
 
   return (
@@ -108,10 +143,10 @@ export default function SettingsPage() {
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
             Hostel System Settings
           </h1>
-          <Badge variant="cyan">Admin Authority</Badge>
+          <Badge variant="cyan">Central Master Authority</Badge>
         </div>
         <p className="text-sm text-emerald-300/80 mt-1">
-          Configure official document headers, warden signature labels, and manage master database integrity.
+          Configure official document headers, warden signature titles, central backup/restore, and common administrator security.
         </p>
       </div>
 
@@ -128,7 +163,7 @@ export default function SettingsPage() {
                   <span>Official Document Header Configuration</span>
                 </h3>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  These titles appear directly on the generated A4 PDF and Word document.
+                  These titles appear directly on generated A4 PDF and Word documents across all devices.
                 </p>
               </div>
             </div>
@@ -205,18 +240,81 @@ export default function SettingsPage() {
                 {savedSuccess ? (
                   <span className="text-xs text-emerald-300 font-bold flex items-center space-x-1">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>Settings Saved Successfully!</span>
+                    <span>Settings Saved &amp; Synced!</span>
                   </span>
                 ) : (
                   <span />
                 )}
 
-                <GlowingButton variant="primary" size="md" icon={Save} type="submit">
+                <GlowingButton variant="primary" size="md" icon={Save} type="submit" loading={isSaving}>
                   Save Changes
                 </GlowingButton>
               </div>
             </form>
 
+          </GlassCard>
+
+          {/* Change Common Administrator Password */}
+          <GlassCard className="p-6">
+            <div className="pb-4 border-b border-emerald-500/20">
+              <h3 className="text-base font-bold text-white flex items-center space-x-2">
+                <Lock className="w-5 h-5 text-emerald-400" />
+                <span>Change Common Administrator Password</span>
+              </h3>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Update the single shared password used to access the system from all 3 devices.
+              </p>
+            </div>
+
+            {passwordSuccess && (
+              <div className="mt-4 p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-200 text-xs flex items-center space-x-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{passwordSuccess}</span>
+              </div>
+            )}
+
+            {passwordError && (
+              <div className="mt-4 p-3 rounded-xl bg-red-950/80 border border-red-500/40 text-red-200 text-xs flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{passwordError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleChangePasswordSubmit} className="space-y-4 pt-4">
+              <div>
+                <label className="text-xs font-semibold text-gray-300 block mb-1">
+                  Current Password:
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Enter current password..."
+                  className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/30 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-gray-300 block mb-1">
+                  New Password (min. 6 characters):
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Enter new secure password..."
+                  className="w-full px-3 py-2 bg-[#021d17] border border-emerald-500/30 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <GlowingButton variant="accent" size="sm" icon={KeyRound} type="submit" loading={isChangingPass}>
+                  Update Admin Password
+                </GlowingButton>
+              </div>
+            </form>
           </GlassCard>
         </div>
 
@@ -227,10 +325,10 @@ export default function SettingsPage() {
             <div className="pb-4 border-b border-emerald-500/20">
               <h3 className="text-base font-bold text-white flex items-center space-x-2">
                 <Database className="w-5 h-5 text-emerald-400" />
-                <span>Master Database Management</span>
+                <span>Central Master Database</span>
               </h3>
               <p className="text-xs text-gray-400 mt-0.5">
-                Safe storage, backup &amp; recovery options.
+                Central persistent database engine with WAL journal mode.
               </p>
             </div>
 
@@ -240,15 +338,19 @@ export default function SettingsPage() {
               <div className="p-4 rounded-2xl bg-[#022019] border border-emerald-500/30 space-y-2">
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-gray-400">Total Registered Members:</span>
-                  <span className="font-bold text-white text-sm">{stats.totalStudents}</span>
+                  <span className="font-bold text-white text-sm">{students.length}</span>
                 </div>
                 <div className="flex justify-between items-center text-xs">
-                  <span className="text-gray-400">Active Pass History Records:</span>
-                  <span className="font-bold text-white text-sm">{stats.totalPasses}</span>
+                  <span className="text-gray-400">Gate Pass History Records:</span>
+                  <span className="font-bold text-white text-sm">{passes.length}</span>
                 </div>
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-gray-400">Storage Engine:</span>
-                  <span className="font-semibold text-emerald-300">Local Master Registry</span>
+                  <span className="font-semibold text-emerald-300">Central SQLite (WAL Mode)</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-gray-400">Sync Mechanism:</span>
+                  <span className="font-semibold text-cyan-300">Server-Sent Events (Live)</span>
                 </div>
               </div>
 
@@ -286,7 +388,7 @@ export default function SettingsPage() {
                   Reset Master Registry:
                 </label>
                 <p className="text-[11px] text-gray-400 mb-2">
-                  Reload the original 97 student roster for VSB Boys Hostel-I (Rooms 01–22).
+                  Reload the official 97 student roster for VSB Boys Hostel-I (Rooms 01–22).
                 </p>
                 <button
                   onClick={() => setIsResetModalOpen(true)}
@@ -316,7 +418,7 @@ export default function SettingsPage() {
             <div>
               <p className="font-bold text-white">Warning: Database Reset</p>
               <p className="text-xs text-red-300 mt-1">
-                This will overwrite the current student list with the default official 97 students distributed across Rooms 01 to 22.
+                This will overwrite the central database with the official 97 students distributed across Rooms 01 to 22. All connected devices will be synchronized automatically.
               </p>
             </div>
           </div>

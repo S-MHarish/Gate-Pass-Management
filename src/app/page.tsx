@@ -1,8 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import {
   Users,
   Building,
@@ -12,7 +11,6 @@ import {
   CheckSquare,
   Square,
   ArrowRight,
-  Printer,
   Download,
   FileText,
   RotateCcw,
@@ -26,14 +24,8 @@ import {
   Eye,
 } from 'lucide-react';
 import { Student, GatePass } from '@/types';
-import {
-  getStudents,
-  getGatePasses,
-  saveGatePass,
-  getHostelInfo,
-  compareRoomNumbers,
-} from '@/lib/storage';
-import { INITIAL_STUDENTS } from '@/lib/seedData';
+import { useRealtime } from '@/context/RealtimeContext';
+import { compareRoomNumbers } from '@/lib/roomUtils';
 import { StatCard } from '@/components/ui/StatCard';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { GlowingButton } from '@/components/ui/GlowingButton';
@@ -43,9 +35,7 @@ import { downloadGatePassPDF } from '@/lib/pdfGenerator';
 import { downloadGatePassDocx } from '@/lib/docxGenerator';
 
 export default function DashboardPage() {
-  const router = useRouter();
-  const [students, setStudents] = useState<Student[]>(INITIAL_STUDENTS);
-  const [passes, setPasses] = useState<GatePass[]>([]);
+  const { students, passes, hostelInfo, createPass } = useRealtime();
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
 
   // Search & Filter State
@@ -58,17 +48,12 @@ export default function DashboardPage() {
   const [outTime, setOutTime] = useState<string>('05:30 PM');
   const [expectedInTime, setExpectedInTime] = useState<string>('08:30 PM');
   const [purpose, setPurpose] = useState<string>('General Evening Outing & Permission');
+  const [includeParentPhone, setIncludeParentPhone] = useState<boolean>(false);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // Preview Modal
   const [activePreviewPass, setActivePreviewPass] = useState<GatePass | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-
-  useEffect(() => {
-    const loadedStudents = getStudents();
-    const loadedPasses = getGatePasses();
-    setStudents(loadedStudents);
-    setPasses(loadedPasses);
-  }, []);
 
   // Compute key stats
   const totalStudents = students.length;
@@ -119,7 +104,7 @@ export default function DashboardPage() {
     });
   }, [students, roomQuery, studentSearchQuery, selectedYear, selectedDept]);
 
-  // Selected Students Array
+  // Selected Students Array (always sorted room-wise)
   const selectedStudents = useMemo(() => {
     return students.filter((s) => selectedStudentIds.has(s.id));
   }, [students, selectedStudentIds]);
@@ -171,8 +156,8 @@ export default function DashboardPage() {
     });
   };
 
-  // Generate Gate Pass
-  const handleGeneratePass = () => {
+  // Generate Gate Pass with central persistence & real-time sync
+  const handleGeneratePass = async () => {
     if (selectedStudents.length === 0) {
       alert('Please select at least 1 student to generate a gate pass.');
       return;
@@ -185,10 +170,11 @@ export default function DashboardPage() {
       year: 'numeric',
     });
 
-    const roomsUsed = Array.from(new Set(selectedStudents.map((s) => s.roomNo))).sort();
+    const roomsUsed = Array.from(new Set(selectedStudents.map((s) => s.roomNo))).sort(compareRoomNumbers);
     const isMonthEnd = selectedStudents.length === totalStudents;
 
-    const newPass = saveGatePass({
+    setIsGenerating(true);
+    const res = await createPass({
       date: today.toISOString().slice(0, 10),
       formattedDate,
       outTime,
@@ -198,12 +184,17 @@ export default function DashboardPage() {
       studentCount: selectedStudents.length,
       students: selectedStudents,
       roomsIncluded: roomsUsed,
+      includeParentPhone,
       generatedBy: 'Warden (Boys Hostel-I)',
     });
+    setIsGenerating(false);
 
-    setPasses(getGatePasses());
-    setActivePreviewPass(newPass);
-    setIsModalOpen(true);
+    if (res.success && res.pass) {
+      setActivePreviewPass(res.pass);
+      setIsModalOpen(true);
+    } else {
+      alert(res.error || 'Failed to save gate pass to central database.');
+    }
   };
 
   // Reuse previous pass handler
@@ -213,6 +204,7 @@ export default function DashboardPage() {
     setPurpose(pass.purpose);
     setOutTime(pass.outTime);
     setExpectedInTime(pass.expectedInTime);
+    setIncludeParentPhone(Boolean(pass.includeParentPhone));
     window.scrollTo({ top: 400, behavior: 'smooth' });
   };
 
@@ -250,150 +242,152 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Top 4 KPI Metrics */}
+      {/* Top Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <StatCard
-          title="Total Hostel Members"
+          title="Total Registered Students"
           value={totalStudents}
-          subtitle="Permanent Master Registry"
+          subtitle="Active Hostel Members in Rooms 01–22"
           icon={Users}
           variant="emerald"
-          trend="100% Stored"
-          onClick={() => router.push('/students')}
+          trend="Permanent Master"
         />
+
         <StatCard
-          title="Total Rooms (1st Floor)"
+          title="Total Rooms Active"
           value={totalRoomsCount}
-          subtitle="Rooms 01 to 22 Active"
+          subtitle="New Construction 1st Floor"
           icon={Building}
           variant="cyan"
+          trend="100% Configured"
         />
+
         <StatCard
-          title="Today's Passes"
+          title="Passes Generated Today"
           value={todayPasses.length}
-          subtitle="Generated Today"
+          subtitle={todayPasses.length > 0 ? 'Active outgoing passes' : 'No passes issued today'}
           icon={Calendar}
-          variant="teal"
-          trend={todayPasses.length > 0 ? `${todayPasses.length} Active` : 'No passes yet'}
-        />
-        <StatCard
-          title="Total Pass History"
-          value={passes.length}
-          subtitle="Archived Gate Passes"
-          icon={FileCheck2}
           variant="amber"
-          onClick={() => router.push('/history')}
+          trend="Audit Tracked"
+        />
+
+        <StatCard
+          title="Central Database Engine"
+          value="Persistent"
+          subtitle="Multi-Device Real-Time Sync"
+          icon={ShieldCheck}
+          variant="teal"
+          trend="Zero-Refresh Live"
         />
       </div>
 
-      {/* Main Workflow Grid: Left = Selection & Room Search, Right = Generation Tray */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      {/* Main Interactive Workspace */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         
-        {/* Left Column (8 cols): Room Search & Student Selector */}
+        {/* Left Column (8 cols): Room Selector & Student Fast Picker */}
         <div className="lg:col-span-8 space-y-6">
           <GlassCard className="p-6">
             
-            {/* Header & Quick Action Row */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-emerald-500/20">
+            {/* Header with quick filters */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-emerald-500/20">
               <div>
-                <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                <h3 className="text-lg font-bold text-white flex items-center space-x-2">
                   <Zap className="w-5 h-5 text-emerald-400" />
-                  <span>Room & Student Quick Selector</span>
-                </h2>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Type a room number (e.g. &quot;10&quot; or &quot;Room 10&quot;) or search student name to instantly select.
+                  <span>Interactive Room-Wise Student Selector</span>
+                </h3>
+                <p className="text-xs text-emerald-300/80 mt-0.5">
+                  Click rooms or individual students to add to the gate pass roster.
                 </p>
               </div>
 
               <div className="flex items-center space-x-2">
                 <button
                   onClick={handleSelectFiltered}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30 transition-colors flex items-center space-x-1.5"
+                  className="text-xs px-3 py-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30 transition-colors font-semibold"
                 >
-                  <CheckSquare className="w-3.5 h-3.5" />
-                  <span>Select Filtered ({filteredStudents.length})</span>
+                  Select Filtered ({filteredStudents.length})
                 </button>
-                {selectedStudentIds.size > 0 && (
-                  <button
-                    onClick={handleDeselectAll}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-950/60 hover:bg-red-900/80 text-red-300 border border-red-500/30 transition-colors"
-                  >
-                    Clear Selection
-                  </button>
-                )}
+                <button
+                  onClick={handleDeselectAll}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-gray-300 border border-emerald-500/20 transition-colors"
+                >
+                  Clear Selection
+                </button>
               </div>
             </div>
 
-            {/* Room Quick Pill Selector (Rooms 1 to 22) */}
-            <div className="py-4">
-              <label className="text-xs font-semibold text-emerald-300/80 uppercase tracking-wider block mb-2">
-                Quick Room Filter (Click to toggle or jump):
+            {/* Quick Room Filter Buttons Grid */}
+            <div className="py-4 border-b border-emerald-500/10">
+              <label className="text-xs font-semibold text-emerald-400/80 block mb-2">
+                Fast Room Selection (Click to toggle entire room):
               </label>
-              <div className="flex flex-wrap gap-1.5">
+              
+              <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-1">
                 <button
                   onClick={() => setRoomQuery('')}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    roomQuery === ''
-                      ? 'bg-emerald-500 text-white shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                    !roomQuery
+                      ? 'bg-emerald-500 text-black shadow-md'
                       : 'bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/20'
                   }`}
                 >
                   All Rooms
                 </button>
 
-                {uniqueRooms.map((r) => {
-                  const roomStudents = students.filter((s) => s.roomNo === r);
-                  const selectedInRoom = roomStudents.filter((s) => selectedStudentIds.has(s.id)).length;
-                  const isSelected = roomQuery === r || roomQuery === `Room ${r}`;
+                {uniqueRooms.map((room) => {
+                  const roomClean = room.replace(/[^0-9]/g, '');
+                  const inThisRoom = students.filter((s) => {
+                    const sc = s.roomNo.replace(/[^0-9]/g, '');
+                    return s.roomNo === room || (roomClean && sc && (sc === roomClean || sc.padStart(2, '0') === roomClean.padStart(2, '0')));
+                  });
+                  const allSelectedInRoom = inThisRoom.length > 0 && inThisRoom.every((s) => selectedStudentIds.has(s.id));
+                  const someSelectedInRoom = inThisRoom.some((s) => selectedStudentIds.has(s.id));
+                  const isCurrentFilter = roomQuery === room;
 
                   return (
-                    <button
-                      key={r}
-                      onClick={() => setRoomQuery(roomQuery === r ? '' : r)}
-                      onDoubleClick={() => handleSelectByRoom(r)}
-                      title={`Room ${r}: ${selectedInRoom}/${roomStudents.length} selected. Double click to select all.`}
-                      className={`relative px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 ${
-                        isSelected
-                          ? 'bg-cyan-600 text-white border border-cyan-300 shadow-[0_0_12px_rgba(56,189,248,0.5)]'
-                          : selectedInRoom > 0
-                          ? 'bg-emerald-900/90 text-white border border-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.3)]'
-                          : 'bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-300/90 border border-emerald-500/20'
-                      }`}
-                    >
-                      <span>R-{r}</span>
-                      {selectedInRoom > 0 && (
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                      )}
-                    </button>
+                    <div key={room} className="inline-flex rounded-lg shadow-sm">
+                      <button
+                        onClick={() => setRoomQuery(roomQuery === room ? '' : room)}
+                        className={`px-2 py-1 text-xs font-bold rounded-l-lg border-y border-l transition-all ${
+                          isCurrentFilter
+                            ? 'bg-emerald-500 text-black border-emerald-400'
+                            : 'bg-emerald-950/50 hover:bg-emerald-900 text-emerald-200 border-emerald-500/25'
+                        }`}
+                        title={`Filter list to Room ${room}`}
+                      >
+                        R-{room}
+                      </button>
+
+                      <button
+                        onClick={() => handleSelectByRoom(room)}
+                        className={`px-1.5 py-1 text-xs font-bold rounded-r-lg border transition-all ${
+                          allSelectedInRoom
+                            ? 'bg-cyan-500 text-black border-cyan-400'
+                            : someSelectedInRoom
+                            ? 'bg-cyan-950 text-cyan-300 border-cyan-500/40'
+                            : 'bg-emerald-950/40 hover:bg-emerald-800/60 text-emerald-400 border-emerald-500/20'
+                        }`}
+                        title={allSelectedInRoom ? `Deselect all students in Room ${room}` : `Select all ${inThisRoom.length} students in Room ${room}`}
+                      >
+                        {allSelectedInRoom ? '✓' : `+${inThisRoom.length}`}
+                      </button>
+                    </div>
                   );
                 })}
               </div>
             </div>
 
-            {/* Instant Search Bar & Dropdown Filters */}
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pb-4">
-              
-              {/* Room Search Input */}
-              <div className="sm:col-span-4 relative">
+            {/* Live Search & Filter Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 py-4">
+              {/* Name/Phone Search */}
+              <div className="sm:col-span-8 relative">
                 <Search className="w-4 h-4 absolute left-3 top-3 text-emerald-400" />
                 <input
                   type="text"
-                  placeholder="Search Room (e.g. 10)"
-                  value={roomQuery}
-                  onChange={(e) => setRoomQuery(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 bg-[#021d17] border border-emerald-500/30 rounded-xl text-sm text-white placeholder-emerald-400/40 focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
-                />
-              </div>
-
-              {/* Student Name / Phone Search Input */}
-              <div className="sm:col-span-4 relative">
-                <Search className="w-4 h-4 absolute left-3 top-3 text-emerald-400" />
-                <input
-                  type="text"
-                  placeholder="Search Student / Phone"
+                  placeholder="Search student name, room (e.g. 10), parent phone, or S.No..."
                   value={studentSearchQuery}
                   onChange={(e) => setStudentSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 bg-[#021d17] border border-emerald-500/30 rounded-xl text-sm text-white placeholder-emerald-400/40 focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
+                  className="w-full pl-9 pr-3 py-2 bg-[#021d17] border border-emerald-500/30 rounded-xl text-xs sm:text-sm text-white placeholder-emerald-400/40 focus:outline-none focus:border-emerald-400"
                 />
               </div>
 
@@ -502,35 +496,47 @@ export default function DashboardPage() {
                                 className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer accent-emerald-500"
                               />
                             </td>
-                            <td className="py-2.5 px-2 text-center font-mono text-xs text-gray-400">
+
+                            <td className="py-2.5 px-2 text-center text-gray-400 font-mono text-xs">
                               {student.sNo}
                             </td>
+
                             <td className="py-2.5 px-2 text-center">
-                              <span className="px-2 py-0.5 rounded-md bg-emerald-950 border border-emerald-500/30 text-emerald-300 font-bold text-xs">
-                                {student.roomNo}
+                              <span className="font-bold text-xs bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded-md border border-emerald-500/30">
+                                R-{student.roomNo}
                               </span>
                             </td>
-                            <td className="py-2.5 px-3 font-semibold text-white">
+
+                            <td className="py-2.5 px-3 font-semibold text-white tracking-wide">
                               {student.name}
                             </td>
+
                             <td className="py-2.5 px-2 text-center">
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300">
+                              <span className="text-xs font-mono text-cyan-300 bg-cyan-950/60 px-1.5 py-0.5 rounded">
                                 {student.department}
                               </span>
                             </td>
-                            <td className="py-2.5 px-2 text-center text-xs text-gray-300">
-                              {student.year}
+
+                            <td className="py-2.5 px-2 text-center">
+                              <Badge variant={student.year === 'III' ? 'emerald' : 'cyan'}>
+                                {student.year} Year
+                              </Badge>
                             </td>
-                            <td className="py-2.5 px-3 text-center font-mono text-xs text-emerald-300/90">
-                              {student.parentPhone}
+
+                            <td className="py-2.5 px-3 text-center text-xs text-emerald-200/90 font-mono">
+                              {student.parentPhone || '—'}
                             </td>
+
                             <td className="py-2.5 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                               <button
-                                onClick={() => handleSelectByRoom(student.roomNo)}
-                                className="text-[11px] text-cyan-300 hover:underline px-1.5 py-0.5 rounded bg-cyan-950/50 hover:bg-cyan-900/80 border border-cyan-500/30"
-                                title={`Toggle all in Room ${student.roomNo}`}
+                                onClick={() => toggleStudent(student.id)}
+                                className={`text-[11px] font-bold px-2 py-1 rounded transition-colors ${
+                                  isSelected
+                                    ? 'bg-red-950 hover:bg-red-900 text-red-300'
+                                    : 'bg-emerald-950 hover:bg-emerald-900 text-emerald-300'
+                                }`}
                               >
-                                Room {student.roomNo}
+                                {isSelected ? 'Remove' : 'Select'}
                               </button>
                             </td>
                           </tr>
@@ -541,61 +547,58 @@ export default function DashboardPage() {
                 </table>
               </div>
 
-              {/* Status bar */}
-              <div className="p-3 bg-[#042820] border-t border-emerald-500/20 flex items-center justify-between text-xs text-emerald-300 font-medium">
-                <span>
-                  Showing {filteredStudents.length} of {totalStudents} Students
-                </span>
-                <span className="font-bold text-white bg-emerald-500/20 px-2.5 py-1 rounded-lg border border-emerald-400/30">
-                  {selectedStudentIds.size} Selected for Gate Pass
-                </span>
+              {/* Table Footer */}
+              <div className="bg-[#021813] px-4 py-2.5 flex items-center justify-between text-xs text-gray-400 border-t border-emerald-500/20">
+                <div>
+                  Showing <span className="font-bold text-white">{filteredStudents.length}</span> of{' '}
+                  <span className="font-bold text-white">{totalStudents}</span> students
+                </div>
+                <div className="font-semibold text-emerald-400">
+                  {selectedStudents.length} Students Selected for Gate Pass
+                </div>
               </div>
             </div>
 
           </GlassCard>
         </div>
 
-        {/* Right Column (4 cols): Gate Pass Generation Station */}
+        {/* Right Column (4 cols): Gate Pass Customizer & Instant Generator */}
         <div className="lg:col-span-4 space-y-6">
-          <GlassCard className="p-6 border-emerald-400/40 shadow-[0_0_30px_rgba(16,185,129,0.15)]">
+          <GlassCard className="p-6 sticky top-24">
             
-            <div className="pb-4 border-b border-emerald-500/20">
-              <div className="flex items-center justify-between">
+            <div className="pb-4 border-b border-emerald-500/20 flex items-center justify-between">
+              <div>
                 <h3 className="text-base font-bold text-white flex items-center space-x-2">
-                  <FileText className="w-5 h-5 text-emerald-400" />
+                  <FileCheck2 className="w-5 h-5 text-emerald-400" />
                   <span>Gate Pass Parameters</span>
                 </h3>
-                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                  {selectedStudents.length} / {totalStudents}
-                </span>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Configure official outing timings and leave reasons.
+                </p>
               </div>
-              <p className="text-xs text-gray-400 mt-1">
-                Configure official times & generate A4 Gate Pass.
-              </p>
+              <Badge variant="cyan">{selectedStudents.length} Selected</Badge>
             </div>
 
-            {/* Quick Presets */}
-            <div className="pt-4 space-y-3">
+            <div className="space-y-4 pt-4">
+              
+              {/* Quick Preset Buttons */}
               <div>
-                <label className="text-xs font-semibold text-emerald-300/90 block mb-1">
-                  Common Purpose Presets:
+                <label className="text-xs font-semibold text-gray-300 block mb-1.5">
+                  Quick Purpose Presets:
                 </label>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
-                    onClick={() => {
-                      setPurpose('Month-End Hometown Leave (All Members)');
-                      setExpectedInTime('Next Monday 07:00 PM');
-                    }}
+                    onClick={handleSelectAllMembers}
                     className="p-1.5 text-[11px] font-semibold rounded-lg bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30 text-left transition-colors truncate"
                   >
-                    🏡 Month-End Leave
+                    🏡 Month-End (All)
                   </button>
                   <button
                     type="button"
                     onClick={() => {
                       setPurpose('General Evening Outing & Permission');
-                      setExpectedInTime('Today 08:30 PM');
+                      setExpectedInTime('08:30 PM');
                     }}
                     className="p-1.5 text-[11px] font-semibold rounded-lg bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30 text-left transition-colors truncate"
                   >
@@ -663,6 +666,22 @@ export default function DashboardPage() {
                 </div>
               </div>
 
+              {/* Parent Phone Number Option Checkbox */}
+              <div className="pt-1 pb-1">
+                <label className="flex items-center space-x-2.5 p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-500/30 cursor-pointer hover:bg-emerald-900/40 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={includeParentPhone}
+                    onChange={(e) => setIncludeParentPhone(e.target.checked)}
+                    className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer accent-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-emerald-200">Include Parent Phone Number</span>
+                    <p className="text-[11px] text-gray-400">Adds PARENT NO. column to PDF/Word/Print</p>
+                  </div>
+                </label>
+              </div>
+
               {/* Selected Summary Box */}
               <div className="p-3.5 rounded-xl bg-[#022019] border border-emerald-500/25 space-y-2">
                 <div className="flex justify-between items-center text-xs">
@@ -680,7 +699,7 @@ export default function DashboardPage() {
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-gray-400">Output Format:</span>
                   <span className="font-semibold text-cyan-300">
-                    Official VSB A4 Pass
+                    Official VSB A4 Pass {includeParentPhone ? '(+ Phone)' : ''}
                   </span>
                 </div>
               </div>
@@ -691,6 +710,7 @@ export default function DashboardPage() {
                 size="lg"
                 icon={FileCheck2}
                 disabled={selectedStudents.length === 0}
+                loading={isGenerating}
                 onClick={handleGeneratePass}
                 className="w-full shadow-[0_0_25px_rgba(16,185,129,0.5)]"
               >
@@ -749,15 +769,17 @@ export default function DashboardPage() {
                   {pass.purpose || 'Hostel Gate Pass'}
                 </h4>
 
-                <div className="grid grid-cols-2 gap-2 text-xs text-gray-400 pt-1">
-                  <div>
-                    <span className="block text-[10px] text-emerald-400/80 uppercase">Date</span>
-                    <span className="font-semibold text-gray-200">{pass.formattedDate || pass.date}</span>
+                <div className="text-xs text-gray-400 space-y-1">
+                  <div className="flex justify-between">
+                    <span>Date & Time:</span>
+                    <span className="text-gray-200 font-medium">
+                      {pass.formattedDate || pass.date} • {pass.outTime || '05:30 PM'}
+                    </span>
                   </div>
-                  <div>
-                    <span className="block text-[10px] text-emerald-400/80 uppercase">Rooms</span>
-                    <span className="font-semibold text-gray-200 truncate block">
-                      {pass.roomsIncluded.length > 5
+                  <div className="flex justify-between">
+                    <span>Rooms:</span>
+                    <span className="text-gray-200 font-medium">
+                      {pass.roomsIncluded.length > 6
                         ? `All ${pass.roomsIncluded.length} Rooms`
                         : pass.roomsIncluded.map((r) => `R-${r}`).join(', ')}
                     </span>
@@ -765,47 +787,48 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* Action buttons */}
-              <div className="flex items-center justify-between gap-2 pt-3 border-t border-emerald-500/20">
+              <div className="flex items-center justify-between pt-3 border-t border-emerald-500/20">
                 <button
                   onClick={() => {
                     setActivePreviewPass(pass);
                     setIsModalOpen(true);
                   }}
-                  className="px-2.5 py-1.5 rounded-lg bg-emerald-950 hover:bg-emerald-900 text-emerald-300 text-xs font-semibold flex items-center space-x-1 border border-emerald-500/30"
+                  className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center space-x-1"
                 >
                   <Eye className="w-3.5 h-3.5" />
-                  <span>View</span>
+                  <span>View Pass</span>
                 </button>
 
-                <button
-                  onClick={() => handleReusePass(pass)}
-                  className="px-2.5 py-1.5 rounded-lg bg-cyan-950 hover:bg-cyan-900 text-cyan-300 text-xs font-semibold flex items-center space-x-1 border border-cyan-500/30"
-                  title="Load this student roster into current pass builder"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Reuse Pass</span>
-                </button>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handleReusePass(pass)}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950 hover:bg-emerald-900 text-cyan-300 border border-cyan-500/30 flex items-center space-x-1"
+                    title="Load students into current pass generator"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Reuse</span>
+                  </button>
 
-                <button
-                  onClick={() => downloadGatePassPDF(pass, getHostelInfo())}
-                  className="p-1.5 rounded-lg bg-emerald-900/60 hover:bg-emerald-800 text-white text-xs font-semibold"
-                  title="Download PDF"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                </button>
+                  <button
+                    onClick={() => downloadGatePassPDF(pass, hostelInfo)}
+                    className="p-1.5 rounded-lg bg-emerald-900/60 hover:bg-emerald-800 text-white"
+                    title="Download Official PDF"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </GlassCard>
           ))}
         </div>
       </div>
 
-      {/* Interactive Official Preview & Export Modal */}
+      {/* Official A4 Modal Preview */}
       <GatePassPreviewModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         pass={activePreviewPass}
-        hostelInfo={getHostelInfo()}
+        hostelInfo={hostelInfo}
       />
 
     </div>

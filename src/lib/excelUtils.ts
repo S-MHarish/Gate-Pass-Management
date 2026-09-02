@@ -37,6 +37,7 @@ export const exportStudentsToCSV = (students: Student[], filename = 'hostel_memb
     'Name': s.name,
     'Department': s.department,
     'Year': s.year,
+    'Parent Phone': s.parentPhone || '',
   }));
 
   const worksheet = XLSX.utils.json_to_sheet(exportData);
@@ -46,7 +47,7 @@ export const exportStudentsToCSV = (students: Student[], filename = 'hostel_memb
 };
 
 export const downloadSampleExcelTemplate = (): void => {
-  const sampleCsv = `S.No,Room No,Name,Department,Year\n1,1,MUTHAMIZHSELVAN.M,CSBS,III\n2,1,VISHWA.S,CSBS,III\n3,2,KAVIN.J,CSE,III\n4,13,KARTHIKEYAN.K,EEE,II`;
+  const sampleCsv = `S.No,Room No,Name,Department,Year,Parent Phone\n1,1,MUTHAMIZHSELVAN.M,CSBS,III,9876543210\n2,1,VISHWA.S,CSBS,III,9876543211\n3,2,KAVIN.J,CSE,III,9876543212\n4,13,KARTHIKEYAN.K,EEE,II,9876543213`;
   const blob = new Blob([sampleCsv], { type: 'text/csv;charset=utf-8;' });
   saveBlobFile(blob, 'hostel_members_template.csv');
 };

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -20,9 +20,10 @@ import {
   Users,
   Clock,
   Sparkles,
+  Phone,
 } from 'lucide-react';
 import { GatePass } from '@/types';
-import { getGatePasses, deleteGatePass, getHostelInfo } from '@/lib/storage';
+import { useRealtime } from '@/context/RealtimeContext';
 import { downloadGatePassPDF } from '@/lib/pdfGenerator';
 import { downloadGatePassDocx } from '@/lib/docxGenerator';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -33,20 +34,14 @@ import { GatePassPreviewModal } from '@/components/pass/GatePassPreviewModal';
 
 export default function PassHistoryPage() {
   const router = useRouter();
-  const [passes, setPasses] = useState<GatePass[]>([]);
+  const { passes, hostelInfo, deletePass: apiDeletePass } = useRealtime();
+
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [dateFilter, setDateFilter] = useState<string>('');
   const [selectedPass, setSelectedPass] = useState<GatePass | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState<boolean>(false);
   const [passToDelete, setPassToDelete] = useState<GatePass | null>(null);
-
-  useEffect(() => {
-    setPasses(getGatePasses());
-  }, []);
-
-  const refreshList = () => {
-    setPasses(getGatePasses());
-  };
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const filteredPasses = useMemo(() => {
     return passes.filter((p) => {
@@ -73,11 +68,12 @@ export default function PassHistoryPage() {
     router.push(`/generate?reuse=${pass.id}`);
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!passToDelete) return;
-    deleteGatePass(passToDelete.id);
+    setIsDeleting(true);
+    await apiDeletePass(passToDelete.id);
+    setIsDeleting(false);
     setPassToDelete(null);
-    refreshList();
   };
 
   return (
@@ -93,7 +89,7 @@ export default function PassHistoryPage() {
             <Badge variant="amber">{passes.length} Total Passes</Badge>
           </div>
           <p className="text-sm text-emerald-300/80 mt-1">
-            Complete historical audit trail of all generated passes. Re-download PDF, Word, or reuse student rosters.
+            Complete historical audit trail stored centrally and synchronized across all connected devices.
           </p>
         </div>
 
@@ -153,6 +149,11 @@ export default function PassHistoryPage() {
                     <Badge variant={pass.studentCount > 50 ? 'cyan' : 'emerald'}>
                       {pass.studentCount} Students
                     </Badge>
+                    {pass.includeParentPhone && (
+                      <span className="text-[11px] font-bold text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-500/30">
+                        + Parent Phone
+                      </span>
+                    )}
                     <span className="text-xs text-gray-400 font-medium flex items-center space-x-1">
                       <Clock className="w-3 h-3 text-emerald-400" />
                       <span>{pass.formattedDate || pass.date} • {pass.outTime || '05:30 PM'}</span>
@@ -203,7 +204,7 @@ export default function PassHistoryPage() {
                   </button>
 
                   <button
-                    onClick={() => downloadGatePassPDF(pass, getHostelInfo())}
+                    onClick={() => downloadGatePassPDF(pass, hostelInfo)}
                     className="p-2 rounded-xl bg-emerald-900/60 hover:bg-emerald-800 text-white text-xs font-semibold"
                     title="Download Official PDF"
                   >
@@ -211,7 +212,7 @@ export default function PassHistoryPage() {
                   </button>
 
                   <button
-                    onClick={() => downloadGatePassDocx(pass, getHostelInfo())}
+                    onClick={() => downloadGatePassDocx(pass, hostelInfo)}
                     className="p-2 rounded-xl bg-emerald-900/60 hover:bg-emerald-800 text-white text-xs font-semibold"
                     title="Download Word (.docx)"
                   >
@@ -238,7 +239,7 @@ export default function PassHistoryPage() {
         isOpen={isPreviewOpen}
         onClose={() => setIsPreviewOpen(false)}
         pass={selectedPass}
-        hostelInfo={getHostelInfo()}
+        hostelInfo={hostelInfo}
       />
 
       {/* Delete Modal */}
@@ -251,7 +252,7 @@ export default function PassHistoryPage() {
           <p className="text-sm text-gray-300">
             Are you sure you want to remove pass{' '}
             <span className="font-bold text-white font-mono">{passToDelete?.passNumber}</span>?
-            This will only remove the pass audit record and will NOT delete any student from the master registry.
+            This will remove the pass audit record from the central database and all connected devices.
           </p>
 
           <div className="flex items-center justify-end space-x-3 pt-2">
@@ -261,7 +262,7 @@ export default function PassHistoryPage() {
             >
               Cancel
             </button>
-            <GlowingButton variant="danger" size="md" onClick={handleConfirmDelete}>
+            <GlowingButton variant="danger" size="md" loading={isDeleting} onClick={handleConfirmDelete}>
               Delete Pass
             </GlowingButton>
           </div>

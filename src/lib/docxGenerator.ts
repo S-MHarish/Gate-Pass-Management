@@ -16,7 +16,7 @@ import {
 import { saveBlobFile } from '@/lib/fileSaver';
 import { GatePass, HostelInfo, Student } from '@/types';
 import { DEFAULT_HOSTEL_INFO } from './seedData';
-import { compareRoomNumbers } from './storage';
+import { compareRoomNumbers } from './roomUtils';
 
 interface RoomGroup {
   roomNo: string;
@@ -46,6 +46,7 @@ export const generateGatePassDocx = async (
   hostelInfo: HostelInfo = DEFAULT_HOSTEL_INFO
 ): Promise<Blob> => {
   const tableRows: TableRow[] = [];
+  const includePhone = Boolean(pass.includeParentPhone);
 
   // Group students by year
   const thirdYearStudents = pass.students.filter((s) => s.year === 'III');
@@ -61,11 +62,70 @@ export const generateGatePassDocx = async (
   let currentSNo = 1;
 
   // Table Header Row
-  tableRows.push(
-    new TableRow({
-      tableHeader: true,
-      height: { value: 340, rule: HeightRule.ATLEAST },
-      children: [
+  const headerCells = includePhone
+    ? [
+        new TableCell({
+          width: { size: 8, type: WidthType.PERCENTAGE },
+          verticalAlign: VerticalAlign.CENTER,
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: 'S.NO.', bold: true, size: 18 })],
+            }),
+          ],
+        }),
+        new TableCell({
+          width: { size: 12, type: WidthType.PERCENTAGE },
+          verticalAlign: VerticalAlign.CENTER,
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: 'ROOM NO.', bold: true, size: 18 })],
+            }),
+          ],
+        }),
+        new TableCell({
+          width: { size: 38, type: WidthType.PERCENTAGE },
+          verticalAlign: VerticalAlign.CENTER,
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: 'NAME OF THE STUDENT', bold: true, size: 18 })],
+            }),
+          ],
+        }),
+        new TableCell({
+          width: { size: 11, type: WidthType.PERCENTAGE },
+          verticalAlign: VerticalAlign.CENTER,
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: 'DEPT', bold: true, size: 18 })],
+            }),
+          ],
+        }),
+        new TableCell({
+          width: { size: 15, type: WidthType.PERCENTAGE },
+          verticalAlign: VerticalAlign.CENTER,
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: 'PARENT NO.', bold: true, size: 18 })],
+            }),
+          ],
+        }),
+        new TableCell({
+          width: { size: 16, type: WidthType.PERCENTAGE },
+          verticalAlign: VerticalAlign.CENTER,
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: 'STUDENT SIGNATURE', bold: true, size: 18 })],
+            }),
+          ],
+        }),
+      ]
+    : [
         new TableCell({
           width: { size: 9, type: WidthType.PERCENTAGE },
           verticalAlign: VerticalAlign.CENTER,
@@ -116,11 +176,17 @@ export const generateGatePassDocx = async (
             }),
           ],
         }),
-      ],
+      ];
+
+  tableRows.push(
+    new TableRow({
+      tableHeader: true,
+      height: { value: 340, rule: HeightRule.ATLEAST },
+      children: headerCells,
     })
   );
 
-  // Helper to add student rows with vertically merged room cells
+  // Helper to add student rows
   const addGroupRows = (groups: RoomGroup[], sectionTitle?: string) => {
     if (groups.length === 0) return;
 
@@ -130,7 +196,7 @@ export const generateGatePassDocx = async (
           height: { value: 300, rule: HeightRule.ATLEAST },
           children: [
             new TableCell({
-              columnSpan: 5,
+              columnSpan: includePhone ? 6 : 5,
               shading: { fill: 'EFEFEF', type: ShadingType.CLEAR },
               verticalAlign: VerticalAlign.CENTER,
               children: [
@@ -150,86 +216,109 @@ export const generateGatePassDocx = async (
         const sNo = currentSNo++;
         const isFirstInRoom = idx === 0;
 
-        tableRows.push(
-          new TableRow({
-            height: { value: 280, rule: HeightRule.ATLEAST },
+        const rowCells = [
+          // S.NO. Cell
+          new TableCell({
+            verticalAlign: VerticalAlign.CENTER,
             children: [
-              // S.NO. Cell
-              new TableCell({
-                verticalAlign: VerticalAlign.CENTER,
-                children: [
-                  new Paragraph({
-                    alignment: AlignmentType.CENTER,
-                    children: [new TextRun({ text: `${sNo}`, size: 18 })],
-                  }),
-                ],
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [new TextRun({ text: `${sNo}`, size: 18 })],
               }),
+            ],
+          }),
 
-              // ROOM NO. Cell - Vertically Merged with Restart on first row and Continue on subsequent rows
-              new TableCell({
-                verticalMerge: isFirstInRoom
-                  ? VerticalMergeType.RESTART
-                  : VerticalMergeType.CONTINUE,
-                verticalAlign: VerticalAlign.CENTER,
-                children: isFirstInRoom
-                  ? [
-                      new Paragraph({
-                        alignment: AlignmentType.CENTER,
-                        children: [
-                          new TextRun({
-                            text: group.roomNo,
-                            bold: true,
-                            size: 18,
-                          }),
-                        ],
-                      }),
-                    ]
-                  : [],
-              }),
-
-              // NAME OF THE STUDENT Cell
-              new TableCell({
-                verticalAlign: VerticalAlign.CENTER,
-                children: [
-                  new Paragraph({
-                    alignment: AlignmentType.LEFT,
-                    children: [
-                      new TextRun({
-                        text: student.name.toUpperCase(),
-                        size: 18,
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-
-              // DEPT Cell
-              new TableCell({
-                verticalAlign: VerticalAlign.CENTER,
-                children: [
+          // ROOM NO. Cell
+          new TableCell({
+            verticalMerge: isFirstInRoom
+              ? VerticalMergeType.RESTART
+              : VerticalMergeType.CONTINUE,
+            verticalAlign: VerticalAlign.CENTER,
+            children: isFirstInRoom
+              ? [
                   new Paragraph({
                     alignment: AlignmentType.CENTER,
                     children: [
                       new TextRun({
-                        text: student.department.toUpperCase(),
+                        text: group.roomNo,
+                        bold: true,
                         size: 18,
                       }),
                     ],
                   }),
-                ],
-              }),
+                ]
+              : [],
+          }),
 
-              // STUDENT SIGNATURE Cell (blank)
-              new TableCell({
-                verticalAlign: VerticalAlign.CENTER,
+          // NAME OF THE STUDENT Cell
+          new TableCell({
+            verticalAlign: VerticalAlign.CENTER,
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.LEFT,
                 children: [
-                  new Paragraph({
-                    alignment: AlignmentType.CENTER,
-                    children: [new TextRun({ text: '', size: 18 })],
+                  new TextRun({
+                    text: (student.name || '').toUpperCase(),
+                    size: 18,
                   }),
                 ],
               }),
             ],
+          }),
+
+          // DEPT Cell
+          new TableCell({
+            verticalAlign: VerticalAlign.CENTER,
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new TextRun({
+                    text: (student.department || '').toUpperCase(),
+                    size: 18,
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ];
+
+        if (includePhone) {
+          rowCells.push(
+            new TableCell({
+              verticalAlign: VerticalAlign.CENTER,
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                    new TextRun({
+                      text: student.parentPhone || '',
+                      size: 18,
+                    }),
+                  ],
+                }),
+              ],
+            })
+          );
+        }
+
+        // Signature Cell
+        rowCells.push(
+          new TableCell({
+            verticalAlign: VerticalAlign.CENTER,
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [new TextRun({ text: '', size: 18 })],
+              }),
+            ],
+          })
+        );
+
+        tableRows.push(
+          new TableRow({
+            height: { value: 280, rule: HeightRule.ATLEAST },
+            children: rowCells,
           })
         );
       });
@@ -246,7 +335,7 @@ export const generateGatePassDocx = async (
         properties: {
           page: {
             margin: {
-              top: 720, // 0.5 inch
+              top: 720,
               bottom: 720,
               left: 720,
               right: 720,
@@ -254,7 +343,6 @@ export const generateGatePassDocx = async (
           },
         },
         children: [
-          // College Header - Exactly Matching
           new Paragraph({
             alignment: AlignmentType.CENTER,
             spacing: { after: 40 },
@@ -292,14 +380,10 @@ export const generateGatePassDocx = async (
               }),
             ],
           }),
-
-          // Student Table with Merged Room No Cells
           new Table({
             rows: tableRows,
             width: { size: 100, type: WidthType.PERCENTAGE },
           }),
-
-          // Signature Section
           new Paragraph({
             alignment: AlignmentType.BOTH,
             spacing: { before: 400 },

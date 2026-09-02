@@ -3,6 +3,7 @@
 import React from 'react';
 import { GatePass, HostelInfo, Student } from '@/types';
 import { DEFAULT_HOSTEL_INFO } from '@/lib/seedData';
+import { compareRoomNumbers } from '@/lib/roomUtils';
 
 interface PrintableGatePassProps {
   pass: GatePass;
@@ -15,16 +16,8 @@ interface RoomGroup {
   students: Student[];
 }
 
-// Group consecutive students by room number
 function groupStudentsByRoom(students: Student[]): RoomGroup[] {
-  const sorted = [...students].sort((a, b) => {
-    const rA = parseInt(a.roomNo, 10);
-    const rB = parseInt(b.roomNo, 10);
-    if (!isNaN(rA) && !isNaN(rB) && rA !== rB) {
-      return rA - rB;
-    }
-    return a.roomNo.localeCompare(b.roomNo);
-  });
+  const sorted = [...students].sort((a, b) => compareRoomNumbers(a.roomNo, b.roomNo));
 
   const groups: RoomGroup[] = [];
   sorted.forEach((student) => {
@@ -46,6 +39,8 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
   hostelInfo = DEFAULT_HOSTEL_INFO,
   isPrintOnly = false,
 }) => {
+  const includePhone = Boolean(pass.includeParentPhone);
+
   // Separate students by year
   const thirdYearStudents = pass.students.filter((s) => s.year === 'III');
   const secondYearStudents = pass.students.filter((s) => s.year === 'II');
@@ -58,6 +53,7 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
   const otherGroups = groupStudentsByRoom(otherStudents);
 
   let currentSNo = 1;
+  const colSpanTotal = includePhone ? 6 : 5;
 
   return (
     <div
@@ -66,7 +62,7 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
       }`}
       style={{ minHeight: '297mm', boxSizing: 'border-box' }}
     >
-      {/* College Official Header - EXACT TEXT */}
+      {/* College Official Header */}
       <div className="text-center space-y-0.5 mb-4">
         <h1 className="text-base sm:text-lg font-bold tracking-tight uppercase">
           {hostelInfo.collegeName || 'VSB ENGINEERING COLLEGE, KARUR'}
@@ -96,6 +92,11 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
               <th className="border border-black py-1.5 px-1.5 text-center w-20 font-bold">
                 DEPT
               </th>
+              {includePhone && (
+                <th className="border border-black py-1.5 px-1.5 text-center w-28 font-bold">
+                  PARENT NO.
+                </th>
+              )}
               <th className="border border-black py-1.5 px-2 text-center w-36 font-bold">
                 STUDENT SIGNATURE
               </th>
@@ -107,7 +108,7 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
               <>
                 <tr className="bg-gray-100 print:bg-gray-100 font-bold">
                   <td
-                    colSpan={5}
+                    colSpan={colSpanTotal}
                     className="border border-black py-1 px-2 text-center uppercase tracking-wide text-xs font-bold"
                   >
                     III-YEAR
@@ -122,7 +123,6 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
                           {sNo}
                         </td>
                         
-                        {/* Merged Room No Cell - exactly centered vertically and horizontally */}
                         {idx === 0 && (
                           <td
                             rowSpan={group.students.length}
@@ -138,6 +138,11 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
                         <td className="border border-black py-1 px-1.5 text-center font-medium">
                           {student.department}
                         </td>
+                        {includePhone && (
+                          <td className="border border-black py-1 px-1.5 text-center font-medium font-mono text-[11px]">
+                            {student.parentPhone || '-'}
+                          </td>
+                        )}
                         <td className="border border-black py-1 px-2 text-center h-7">
                           {/* Blank for signature */}
                         </td>
@@ -153,7 +158,7 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
               <>
                 <tr className="bg-gray-100 print:bg-gray-100 font-bold">
                   <td
-                    colSpan={5}
+                    colSpan={colSpanTotal}
                     className="border border-black py-1 px-2 text-center uppercase tracking-wide text-xs font-bold"
                   >
                     II-YEAR
@@ -168,7 +173,6 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
                           {sNo}
                         </td>
 
-                        {/* Merged Room No Cell */}
                         {idx === 0 && (
                           <td
                             rowSpan={group.students.length}
@@ -184,6 +188,11 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
                         <td className="border border-black py-1 px-1.5 text-center font-medium">
                           {student.department}
                         </td>
+                        {includePhone && (
+                          <td className="border border-black py-1 px-1.5 text-center font-medium font-mono text-[11px]">
+                            {student.parentPhone || '-'}
+                          </td>
+                        )}
                         <td className="border border-black py-1 px-2 text-center h-7">
                           {/* Blank for signature */}
                         </td>
@@ -194,13 +203,13 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
               </>
             )}
 
-            {/* Fallback for other students */}
+            {/* Other Students */}
             {otherGroups.length > 0 && (
               <>
                 {thirdYearGroups.length === 0 && secondYearGroups.length === 0 ? null : (
                   <tr className="bg-gray-100 print:bg-gray-100 font-bold">
                     <td
-                      colSpan={5}
+                      colSpan={colSpanTotal}
                       className="border border-black py-1 px-2 text-center uppercase tracking-wide text-xs font-bold"
                     >
                       OTHER STUDENTS
@@ -231,6 +240,11 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
                         <td className="border border-black py-1 px-1.5 text-center font-medium">
                           {student.department}
                         </td>
+                        {includePhone && (
+                          <td className="border border-black py-1 px-1.5 text-center font-medium font-mono text-[11px]">
+                            {student.parentPhone || '-'}
+                          </td>
+                        )}
                         <td className="border border-black py-1 px-2 text-center h-7">
                           {/* Blank */}
                         </td>
@@ -244,7 +258,7 @@ export const PrintableGatePass: React.FC<PrintableGatePassProps> = ({
         </table>
       </div>
 
-      {/* Official Signatures Section at bottom - ONLY ASST. WARDEN and DEPUTY WARDEN */}
+      {/* Official Signatures Section */}
       <div className="mt-14 pt-4 flex justify-between items-end text-xs sm:text-sm font-bold uppercase tracking-wider">
         <div className="text-center">
           <p>{hostelInfo.asstWarden || 'ASST. WARDEN'}</p>
